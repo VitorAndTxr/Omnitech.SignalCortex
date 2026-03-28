@@ -60,7 +60,7 @@ class Trainer:
         self.scheduler = self._build_scheduler(config)
         self.early_stopping = EarlyStopping(config.training.early_stopping_patience)
 
-        name = run_name or f"{config.model.type}_{config.data.timeframe}"
+        name = run_name or f"multiscale_{config.data.decision_timeframe}"
         log_dir = os.path.join(config.export.output_dir, "runs", name)
         self.writer = SummaryWriter(log_dir=log_dir)
 
@@ -71,10 +71,13 @@ class Trainer:
         self.model.train()
         total_loss, all_preds, all_labels = 0.0, [], []
 
-        for x, y in train_loader:
-            x, y = x.to(self.device), y.to(self.device)
+        for x_5m, x_15m, x_1h, y in train_loader:
+            x_5m = x_5m.to(self.device)
+            x_15m = x_15m.to(self.device)
+            x_1h = x_1h.to(self.device)
+            y = y.to(self.device)
             self.optimizer.zero_grad()
-            logits = self.model(x)
+            logits = self.model(x_5m, x_15m, x_1h)
             loss = self.criterion(logits, y)
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
@@ -97,9 +100,12 @@ class Trainer:
         total_loss, all_preds, all_labels = 0.0, [], []
 
         with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.to(self.device), y.to(self.device)
-                logits = self.model(x)
+            for x_5m, x_15m, x_1h, y in val_loader:
+                x_5m = x_5m.to(self.device)
+                x_15m = x_15m.to(self.device)
+                x_1h = x_1h.to(self.device)
+                y = y.to(self.device)
+                logits = self.model(x_5m, x_15m, x_1h)
                 loss = self.criterion(logits, y)
                 total_loss += loss.item() * len(y)
                 preds = logits.argmax(dim=1).cpu().numpy()

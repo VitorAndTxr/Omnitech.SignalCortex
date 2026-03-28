@@ -18,7 +18,7 @@ def cmd_train(args):
     import torch
 
     from configs.config import load_config
-    from data.dataset import create_dataloaders
+    from data.dataset import create_multiscale_dataloaders
     from data.db import DatabaseConnection
     from data.splits import simple_split
     from models import build_model
@@ -28,26 +28,48 @@ def cmd_train(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
-    print(f"Fetching data for {config.data.pair_name} {config.data.timeframe}...")
+    print(f"Fetching multi-scale data for {config.data.pair_name} "
+          f"(decision: {config.data.decision_timeframe}, timeframes: {config.data.timeframes})...")
+
     with DatabaseConnection(config.database) as db:
-        df = db.fetch_features(
+        dfs = db.fetch_multiscale_features(
             pair_name=config.data.pair_name,
-            timeframe=config.data.timeframe,
+            timeframes=config.data.timeframes,
+            decision_timeframe=config.data.decision_timeframe,
             feature_columns=config.data.feature_columns,
             label_column=config.data.label_column,
         )
 
-    if df.empty:
+    df_decision = dfs[config.data.decision_timeframe]
+    if df_decision.empty:
         print("ERROR: No data returned. Check database connection and pair/timeframe settings.")
         sys.exit(1)
 
-    print(f"Loaded {len(df)} rows")
-    train_df, val_df, test_df = simple_split(df)
+    print(f"Decision timeframe rows: {len(df_decision)}")
 
-    train_loader, val_loader, test_loader, class_weights, normalizer = create_dataloaders(
-        config, train_df, val_df, test_df
+    # Split decision timeframe chronologically; apply same date boundaries to context timeframes
+    from data.splits import apply_date_split
+
+    train_decision, val_decision, test_decision = simple_split(df_decision)
+    train_start = train_decision["candle_open_time"].min()
+    train_end = train_decision["candle_open_time"].max()
+    val_start = val_decision["candle_open_time"].min()
+    val_end = val_decision["candle_open_time"].max()
+    test_start = test_decision["candle_open_time"].min()
+    test_end = test_decision["candle_open_time"].max()
+
+    train_dfs, val_dfs, test_dfs = apply_date_split(
+        dfs, train_start, train_end, val_start, val_end, test_start, test_end
     )
-    print(f"Train windows: {len(train_loader.dataset)}, "
+    dt = config.data.decision_timeframe
+    train_dfs[dt] = train_decision.reset_index(drop=True)
+    val_dfs[dt] = val_decision.reset_index(drop=True)
+    test_dfs[dt] = test_decision.reset_index(drop=True)
+
+    train_loader, val_loader, test_loader, class_weights, normalizers = \
+        create_multiscale_dataloaders(config, train_dfs, val_dfs, test_dfs)
+
+    print(f"Train samples: {len(train_loader.dataset)}, "
           f"Val: {len(val_loader.dataset)}, Test: {len(test_loader.dataset)}")
 
     if class_weights is not None:
@@ -56,7 +78,7 @@ def cmd_train(args):
     num_features = len(config.data.feature_columns)
     model = build_model(num_features, config.model)
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Model: {config.model.type} | Parameters: {total_params:,}")
+    print(f"Model: multiscale/{config.model.branch_encoder} | Parameters: {total_params:,}")
 
     os.makedirs(config.export.output_dir, exist_ok=True)
     checkpoint_prefix = os.path.join(config.export.output_dir, "best_model")
@@ -67,53 +89,83 @@ def cmd_train(args):
     print(f"Best epoch: {result['best_epoch']}, Best val F1: {result['best_val_f1']:.4f}")
     print(f"Checkpoint saved: {result['checkpoint_path']}")
 
-    # Save normalizer alongside checkpoint for later export
-    normalizer_path = os.path.join(config.export.output_dir, "best_model_normalizer.pkl")
-    normalizer.save(normalizer_path)
-    print(f"Normalizer saved: {normalizer_path}")
+    # Save per-timeframe normalizers alongside checkpoint
+    import pickle
+    for tf, norm in normalizers.items():
+        norm_path = os.path.join(config.export.output_dir, f"best_model_normalizer_{tf}.pkl")
+        norm.save(norm_path)
+    print(f"Normalizers saved to {config.export.output_dir}")
 
 
 def cmd_evaluate(args):
     import torch
 
     from configs.config import load_config
-    from data.dataset import create_dataloaders
+    from data.dataset import create_multiscale_dataloaders, _build_multiscale_dataset
     from data.db import DatabaseConnection
     from data.normalizer import FeatureNormalizer
-    from data.splits import simple_split
+    from data.splits import simple_split, apply_date_split
     from models import build_model
+    from torch.utils.data import DataLoader
     from training.evaluator import Evaluator
 
     config = load_config(args.config)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     with DatabaseConnection(config.database) as db:
-        df = db.fetch_features(
+        dfs = db.fetch_multiscale_features(
             pair_name=config.data.pair_name,
-            timeframe=config.data.timeframe,
+            timeframes=config.data.timeframes,
+            decision_timeframe=config.data.decision_timeframe,
             feature_columns=config.data.feature_columns,
             label_column=config.data.label_column,
         )
 
-    train_df, val_df, test_df = simple_split(df)
+    df_decision = dfs[config.data.decision_timeframe]
+    train_decision, val_decision, test_decision = simple_split(df_decision)
 
-    # Load fitted normalizer if available
-    normalizer_path = args.checkpoint.replace(".pt", "_normalizer.pkl")
-    normalizer = FeatureNormalizer.load(normalizer_path) if os.path.exists(normalizer_path) else None
-
-    _, _, test_loader, _, normalizer = create_dataloaders(
-        config, train_df, val_df, test_df, normalizer=normalizer
+    train_dfs, val_dfs, test_dfs = apply_date_split(
+        dfs,
+        train_decision["candle_open_time"].min(), train_decision["candle_open_time"].max(),
+        val_decision["candle_open_time"].min(), val_decision["candle_open_time"].max(),
+        test_decision["candle_open_time"].min(), test_decision["candle_open_time"].max(),
     )
+    dt = config.data.decision_timeframe
+    train_dfs[dt] = train_decision.reset_index(drop=True)
+    val_dfs[dt] = val_decision.reset_index(drop=True)
+    test_dfs[dt] = test_decision.reset_index(drop=True)
+
+    # Load per-timeframe normalizers if available
+    normalizers = {}
+    for tf in config.data.timeframes:
+        pkl_path = args.checkpoint.replace(".pt", f"_normalizer_{tf}.pkl")
+        if os.path.exists(pkl_path):
+            normalizers[tf] = FeatureNormalizer.load(pkl_path)
+
+    if normalizers:
+        # Normalizers loaded from pickle — build test_loader using them directly (no re-fitting)
+        w5, w15, w1h = config.model.branch_window_sizes
+        test_ds = _build_multiscale_dataset(
+            test_dfs, config.data.decision_timeframe,
+            config.data.feature_columns, config.data.label_column,
+            normalizers, w5, w15, w1h,
+        )
+        test_loader = DataLoader(test_ds, batch_size=config.training.batch_size, shuffle=False)
+    else:
+        # No pickles found — fit normalizers from training data
+        _, _, test_loader, _, normalizers = create_multiscale_dataloaders(
+            config, train_dfs, val_dfs, test_dfs
+        )
 
     num_features = len(config.data.feature_columns)
     model = build_model(num_features, config.model)
     checkpoint = torch.load(args.checkpoint, map_location=device)
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    evaluator = Evaluator(model, device=device, timeframe=config.data.timeframe)
+    evaluator = Evaluator(model, device=device, timeframe=config.data.decision_timeframe)
     price_cols = ["open_price", "high_price", "low_price", "close_price"]
-    prices_df = test_df[price_cols].reset_index(drop=True) if all(
-        c in test_df.columns for c in price_cols
+    prices_df = test_dfs[dt][price_cols].reset_index(drop=True) if all(
+        c in test_dfs[dt].columns for c in price_cols
     ) else None
 
     results = evaluator.evaluate(test_loader, prices_df=prices_df)
@@ -184,7 +236,7 @@ def main():
     p_eval.add_argument("--checkpoint", required=True, help="Path to .pt checkpoint file")
 
     # export
-    p_export = subparsers.add_parser("export", help="Export checkpoint to ONNX + normalizer JSON")
+    p_export = subparsers.add_parser("export", help="Export checkpoint to ONNX + normalizer JSONs")
     p_export.add_argument("--config", required=True)
     p_export.add_argument("--checkpoint", required=True)
 

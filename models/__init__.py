@@ -15,27 +15,18 @@ class BaseModel(nn.Module):
 
     def forward(self, x):
         """
-        x: (batch, window_size, num_features)
-        returns: (batch, 2) logits for [HOLD, BUY]
+        Base signature for single-input models. MultiScaleModel overrides this
+        with forward(x_5m, x_15m, x_1h).
         """
         raise NotImplementedError
 
 
 def build_model(num_features: int, config: ModelConfig) -> BaseModel:
-    """Factory: instantiate the model type specified in config."""
-    from models.lstm import LSTMModel
-    from models.tcn import TCNModel
-    from models.transformer import TransformerModel
+    """Factory: always returns MultiScaleModel. Raises if config.type != 'multiscale'."""
     from models.multiscale import MultiScaleModel
 
-    registry = {
-        "lstm": LSTMModel,
-        "tcn": TCNModel,
-        "transformer": TransformerModel,
-        "multiscale": MultiScaleModel,
-    }
-
-    if config.type not in registry:
-        raise ValueError(f"Unknown model type: {config.type!r}. Choose from {list(registry)}")
-
-    return registry[config.type](num_features, config)
+    if config.type != "multiscale":
+        raise ValueError(
+            f"Only 'multiscale' model type is supported. Got: {config.type!r}"
+        )
+    return MultiScaleModel(num_features, config)

@@ -10,7 +10,8 @@ database:
 
 data:
   pair_name: BTCUSDT
-  timeframe: "5m"
+  decision_timeframe: "5m"         # Timeframe from which labels are sourced
+  timeframes: ["5m", "15m", "1h"]  # All three timeframes loaded for multi-scale
   feature_columns:
     - rsi_14
     - rsi_7
@@ -61,22 +62,20 @@ data:
     - price_ema21_ratio
 
 model:
-  type: lstm  # 'lstm', 'tcn', 'transformer', 'multiscale'
-  window_size: 120
-  hidden_size: 128
+  type: multiscale                       # Only supported type
+  branch_encoder: lstm                   # Encoder type per branch: 'lstm', 'tcn', 'transformer'
+  branch_hidden_sizes: [128, 64, 64]     # Hidden size for 5m, 15m, 1h branches
+  branch_window_sizes: [120, 60, 48]     # Window: 5m=120 (10h), 15m=60 (15h), 1h=48 (2d)
   num_layers: 2
   dropout: 0.3
   bidirectional: true
   use_attention: true
-  # TCN-specific
+  # TCN-specific (used when branch_encoder='tcn')
   kernel_size: 3
   num_channels: [64, 64, 128, 128]
-  # Transformer-specific
+  # Transformer-specific (used when branch_encoder='transformer')
   nhead: 4
   dim_feedforward: 256
-  # MultiScale-specific
-  branch_hidden_sizes: [128, 64, 64]
-  branch_window_sizes: [120, 60, 48]
 
 training:
   epochs: 100

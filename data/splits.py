@@ -1,7 +1,7 @@
 """Temporal splitting utilities for walk-forward and simple chronological splits."""
 
 from datetime import timedelta
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import pandas as pd
 from dateutil.relativedelta import relativedelta
@@ -68,6 +68,25 @@ def walk_forward_splits(
         window_start += relativedelta(months=config.step_months)
 
     return splits
+
+
+def apply_date_split(
+    dfs: Dict[str, pd.DataFrame],
+    train_start, train_end,
+    val_start, val_end,
+    test_start, test_end,
+) -> Tuple[Dict[str, pd.DataFrame], Dict[str, pd.DataFrame], Dict[str, pd.DataFrame]]:
+    """Apply identical date boundaries to a dict of timeframe DataFrames."""
+
+    def _filter(df, lo, hi):
+        return df[
+            (df["candle_open_time"] >= lo) & (df["candle_open_time"] < hi)
+        ].reset_index(drop=True)
+
+    train = {tf: _filter(df, train_start, train_end) for tf, df in dfs.items()}
+    val = {tf: _filter(df, val_start, val_end) for tf, df in dfs.items()}
+    test = {tf: _filter(df, test_start, test_end) for tf, df in dfs.items()}
+    return train, val, test
 
 
 def simple_split(

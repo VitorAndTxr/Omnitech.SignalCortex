@@ -55,15 +55,16 @@ class TestDictToConfig:
         assert cfg.database.host == "localhost"
         assert cfg.database.port == 5432
         assert cfg.data.pair_name == "BTCUSDT"
-        assert cfg.model.type == "lstm"
+        assert cfg.model.type == "multiscale"
+        assert cfg.model.branch_encoder == "lstm"
         assert cfg.training.epochs == 100
         assert cfg.export.onnx_opset == 17
 
     def test_values_are_applied(self):
         raw = {
             "database": {"host": "db.internal", "port": 5433, "dbname": "test_db"},
-            "data": {"pair_name": "ETHUSDT", "timeframe": "1m"},
-            "model": {"type": "tcn", "hidden_size": 64},
+            "data": {"pair_name": "ETHUSDT", "decision_timeframe": "15m"},
+            "model": {"type": "multiscale", "branch_encoder": "tcn"},
             "training": {"epochs": 50, "batch_size": 128},
             "export": {"onnx_opset": 14, "output_dir": "out/"},
         }
@@ -71,8 +72,9 @@ class TestDictToConfig:
         assert cfg.database.host == "db.internal"
         assert cfg.database.port == 5433
         assert cfg.data.pair_name == "ETHUSDT"
-        assert cfg.model.type == "tcn"
-        assert cfg.model.hidden_size == 64
+        assert cfg.data.decision_timeframe == "15m"
+        assert cfg.model.type == "multiscale"
+        assert cfg.model.branch_encoder == "tcn"
         assert cfg.training.epochs == 50
         assert cfg.export.onnx_opset == 14
 
@@ -110,23 +112,23 @@ class TestLoadConfig:
 
     def test_load_experiment_yaml_merges_with_default(self, tmp_path):
         # Create default.yaml two levels up from experiments/
-        default = {"model": {"type": "lstm", "hidden_size": 128}, "training": {"epochs": 100}}
+        default = {"model": {"type": "multiscale", "branch_encoder": "lstm"}, "training": {"epochs": 100}}
         experiments_dir = tmp_path / "configs" / "experiments"
         experiments_dir.mkdir(parents=True)
         default_yaml = tmp_path / "default.yaml"
         default_yaml.write_text(yaml.dump(default))
 
         exp_yaml = experiments_dir / "exp1.yaml"
-        exp_yaml.write_text(yaml.dump({"model": {"hidden_size": 256}}))
+        exp_yaml.write_text(yaml.dump({"model": {"branch_encoder": "tcn"}}))
 
         cfg = load_config(str(exp_yaml))
-        # merged: type from default, hidden_size from experiment
-        assert cfg.model.type == "lstm"
-        assert cfg.model.hidden_size == 256
+        # merged: type from default, branch_encoder overridden by experiment
+        assert cfg.model.type == "multiscale"
+        assert cfg.model.branch_encoder == "tcn"
         assert cfg.training.epochs == 100
 
     def test_load_empty_yaml(self, tmp_path):
         cfg_file = tmp_path / "empty.yaml"
         cfg_file.write_text("")
         cfg = load_config(str(cfg_file))
-        assert cfg.model.type == "lstm"
+        assert cfg.model.type == "multiscale"

@@ -76,3 +76,33 @@ class LSTMModel(BaseModel):
             context = outputs[:, -1, :]  # last timestep
 
         return self.classifier(context)  # (B, 2)
+
+
+class _LSTMEncoder(nn.Module):
+    """BiLSTM + attention encoder without classifier. Returns (B, hidden_size)."""
+
+    def __init__(self, num_features: int, hidden_size: int, config: ModelConfig):
+        super().__init__()
+        directions = 2 if config.bidirectional else 1
+        self.lstm = nn.LSTM(
+            input_size=num_features,
+            hidden_size=hidden_size,
+            num_layers=config.num_layers,
+            batch_first=True,
+            bidirectional=config.bidirectional,
+            dropout=config.dropout if config.num_layers > 1 else 0.0,
+        )
+        lstm_out_size = hidden_size * directions
+        self.attention = Attention(lstm_out_size)
+        # Project to guaranteed output size regardless of bidirectionality
+        self.proj = nn.Linear(lstm_out_size, hidden_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        outputs, _ = self.lstm(x)
+        context, _ = self.attention(outputs)
+        return self.proj(context)  # (B, hidden_size)
+
+
+def build_lstm_encoder(num_features: int, hidden_size: int, config: ModelConfig) -> nn.Module:
+    """Returns nn.Module: (B, W, F) -> (B, hidden_size). BiLSTM + Attention, no classifier."""
+    return _LSTMEncoder(num_features, hidden_size, config)

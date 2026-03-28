@@ -118,9 +118,11 @@ class Evaluator:
         all_preds, all_labels, all_probs = [], [], []
 
         with torch.no_grad():
-            for x, y in test_loader:
-                x = x.to(self.device)
-                logits = self.model(x)
+            for x_5m, x_15m, x_1h, y in test_loader:
+                x_5m = x_5m.to(self.device)
+                x_15m = x_15m.to(self.device)
+                x_1h = x_1h.to(self.device)
+                logits = self.model(x_5m, x_15m, x_1h)
                 probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
                 preds = logits.argmax(dim=1).cpu().numpy()
                 all_preds.extend(preds)

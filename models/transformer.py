@@ -75,3 +75,38 @@ class TransformerModel(BaseModel):
         x = self.encoder(x)     # (B, S, d_model)
         x = x.mean(dim=1)       # mean pool -> (B, d_model)
         return self.classifier(x)
+
+
+class _TransformerEncoder(nn.Module):
+    """TransformerEncoder + MeanPool + projection without classifier. Returns (B, hidden_size)."""
+
+    def __init__(self, num_features: int, hidden_size: int, config: ModelConfig):
+        super().__init__()
+        assert hidden_size % config.nhead == 0, (
+            f"hidden_size ({hidden_size}) must be divisible by nhead ({config.nhead})"
+        )
+        # Use nhead from config; d_model must be divisible by nhead.
+        # We project to hidden_size directly (hidden_size must be divisible by nhead).
+        d_model = hidden_size
+        self.input_proj = nn.Linear(num_features, d_model)
+        self.pos_enc = SinusoidalPositionalEncoding(d_model, max_len=512, dropout=config.dropout)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=config.nhead,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
+            batch_first=True,
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=config.num_layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.input_proj(x)   # (B, S, d_model)
+        x = self.pos_enc(x)
+        x = self.encoder(x)      # (B, S, d_model)
+        return x.mean(dim=1)     # (B, hidden_size)
+
+
+def build_transformer_encoder(num_features: int, hidden_size: int, config: ModelConfig) -> nn.Module:
+    """Returns nn.Module: (B, W, F) -> (B, hidden_size). TransformerEncoder + MeanPool."""
+    return _TransformerEncoder(num_features, hidden_size, config)

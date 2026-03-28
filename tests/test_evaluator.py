@@ -12,7 +12,7 @@ from training.evaluator import (
     Evaluator,
 )
 from configs.config import ModelConfig
-from models.lstm import LSTMModel
+from models.multiscale import MultiScaleModel
 from unittest.mock import MagicMock
 import torch
 from torch.utils.data import DataLoader, TensorDataset
@@ -155,17 +155,23 @@ class TestPeriodsPerYear:
 class TestEvaluator:
     def _make_model(self, num_features=4):
         cfg = ModelConfig()
-        cfg.hidden_size = 16
+        cfg.type = "multiscale"
+        cfg.branch_encoder = "lstm"
+        cfg.branch_hidden_sizes = [16, 8, 8]
+        cfg.branch_window_sizes = [10, 5, 4]
         cfg.num_layers = 1
         cfg.dropout = 0.0
         cfg.bidirectional = False
         cfg.use_attention = False
-        return LSTMModel(num_features, cfg).eval()
+        return MultiScaleModel(num_features, cfg).eval()
 
-    def _make_loader(self, n=50, features=4, window=10):
-        x = torch.randn(n, window, features)
+    def _make_loader(self, n=50, features=4, w5=10, w15=5, w1h=4):
+        """DataLoader that returns (x_5m, x_15m, x_1h, y) tuples."""
+        x_5m = torch.randn(n, w5, features)
+        x_15m = torch.randn(n, w15, features)
+        x_1h = torch.randn(n, w1h, features)
         y = torch.randint(0, 2, (n,))
-        ds = TensorDataset(x, y)
+        ds = TensorDataset(x_5m, x_15m, x_1h, y)
         return DataLoader(ds, batch_size=16)
 
     def test_evaluate_returns_expected_keys(self):
@@ -188,16 +194,14 @@ class TestEvaluator:
         model = self._make_model()
         ev = Evaluator(model, device="cpu")
         loader = self._make_loader(n=50)
-        # prices_df must have at least as many rows as predictions
         prices = _make_prices(50)
         results = ev.evaluate(loader, prices_df=prices)
         assert "financial" in results
 
     def test_financial_metrics_zero_trades(self):
         model = self._make_model()
-        # Force model to always predict HOLD by zeroing out BUY logit
+        # Force model to always predict HOLD by setting BUY logit to very negative
         with torch.no_grad():
-            # Access the final linear layer and set BUY output to very negative
             for m in model.modules():
                 if isinstance(m, torch.nn.Linear) and m.out_features == 2:
                     m.weight.data[1] = -100.0

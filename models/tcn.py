@@ -100,3 +100,34 @@ class TCNModel(BaseModel):
         x = self.network(x)                    # (B, C_last, S)
         x = x.mean(dim=2)                      # global average pool -> (B, C_last)
         return self.classifier(x)              # (B, 2)
+
+
+class _TCNEncoder(nn.Module):
+    """TCN + GlobalAvgPool + projection encoder without classifier. Returns (B, hidden_size)."""
+
+    def __init__(self, num_features: int, hidden_size: int, config: ModelConfig):
+        super().__init__()
+        num_channels = config.num_channels
+        kernel_size = config.kernel_size
+        dropout = config.dropout
+
+        blocks = []
+        in_ch = num_features
+        for i, out_ch in enumerate(num_channels):
+            dilation = 2 ** i
+            blocks.append(TemporalBlock(in_ch, out_ch, kernel_size, dilation, dropout))
+            in_ch = out_ch
+
+        self.network = nn.Sequential(*blocks)
+        self.proj = nn.Linear(num_channels[-1], hidden_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.transpose(1, 2)          # (B, F, S)
+        x = self.network(x)            # (B, C_last, S)
+        x = x.mean(dim=2)              # (B, C_last)
+        return self.proj(x)            # (B, hidden_size)
+
+
+def build_tcn_encoder(num_features: int, hidden_size: int, config: ModelConfig) -> nn.Module:
+    """Returns nn.Module: (B, W, F) -> (B, hidden_size). TCN + GlobalAvgPool + projection."""
+    return _TCNEncoder(num_features, hidden_size, config)

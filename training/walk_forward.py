@@ -1,4 +1,4 @@
-"""Walk-forward validation orchestrator."""
+"""Walk-forward validation orchestrator — multi-scale pipeline."""
 
 import json
 import os
@@ -7,9 +7,9 @@ from typing import Dict
 import numpy as np
 
 from configs.config import Config
-from data.dataset import create_dataloaders
+from data.dataset import create_multiscale_dataloaders
 from data.db import DatabaseConnection
-from data.splits import walk_forward_splits
+from data.splits import apply_date_split, walk_forward_splits
 from models import build_model
 from training.evaluator import Evaluator
 from training.trainer import Trainer
@@ -22,22 +22,30 @@ class WalkForwardValidator:
 
     def run(self) -> Dict:
         config = self.config
+        decision_tf = config.data.decision_timeframe
 
-        print(f"Fetching data for {config.data.pair_name} {config.data.timeframe}...")
+        print(f"Fetching multi-scale data for {config.data.pair_name} "
+              f"(decision: {decision_tf}, timeframes: {config.data.timeframes})...")
+
         with DatabaseConnection(config.database) as db:
-            df = db.fetch_features(
+            dfs = db.fetch_multiscale_features(
                 pair_name=config.data.pair_name,
-                timeframe=config.data.timeframe,
+                timeframes=config.data.timeframes,
+                decision_timeframe=decision_tf,
                 feature_columns=config.data.feature_columns,
                 label_column=config.data.label_column,
             )
 
-        if df.empty:
-            raise RuntimeError("No data returned from database. Check pair/timeframe/labels.")
+        df_decision = dfs[decision_tf]
+        if df_decision.empty:
+            raise RuntimeError("No data returned for decision timeframe. Check pair/timeframe/labels.")
 
-        print(f"Loaded {len(df)} rows from {df['candle_open_time'].min()} to {df['candle_open_time'].max()}")
+        print(f"Decision timeframe rows: {len(df_decision)} "
+              f"({df_decision['candle_open_time'].min()} → {df_decision['candle_open_time'].max()})")
 
-        splits = walk_forward_splits(df, config.training.walk_forward)
+        # Walk-forward splits are derived from the decision timeframe; date boundaries
+        # are then applied uniformly to all three timeframes.
+        splits = walk_forward_splits(df_decision, config.training.walk_forward)
         if not splits:
             raise RuntimeError(
                 "No valid walk-forward splits generated. "
@@ -46,19 +54,35 @@ class WalkForwardValidator:
 
         print(f"Generated {len(splits)} walk-forward folds")
         fold_results = []
+        num_features = len(config.data.feature_columns)
 
-        for fold_idx, (train_df, val_df, test_df) in enumerate(splits):
+        for fold_idx, (train_decision, val_decision, test_decision) in enumerate(splits):
             print(f"\n--- Fold {fold_idx + 1}/{len(splits)} ---")
-            print(f"  Train: {len(train_df)} rows, Val: {len(val_df)} rows, Test: {len(test_df)} rows")
 
-            train_loader, val_loader, test_loader, class_weights, normalizer = create_dataloaders(
-                config, train_df, val_df, test_df
+            train_start = train_decision["candle_open_time"].min()
+            train_end = train_decision["candle_open_time"].max()
+            val_start = val_decision["candle_open_time"].min()
+            val_end = val_decision["candle_open_time"].max()
+            test_start = test_decision["candle_open_time"].min()
+            test_end = test_decision["candle_open_time"].max()
+
+            train_dfs, val_dfs, test_dfs = apply_date_split(
+                dfs, train_start, train_end, val_start, val_end, test_start, test_end
             )
+            # Override decision timeframe with the exact walk-forward split (preserves label filter)
+            train_dfs[decision_tf] = train_decision.reset_index(drop=True)
+            val_dfs[decision_tf] = val_decision.reset_index(drop=True)
+            test_dfs[decision_tf] = test_decision.reset_index(drop=True)
 
-            num_features = len(config.data.feature_columns)
+            print(f"  Decision TF — Train: {len(train_dfs[decision_tf])} rows, "
+                  f"Val: {len(val_dfs[decision_tf])} rows, "
+                  f"Test: {len(test_dfs[decision_tf])} rows")
+
+            train_loader, val_loader, test_loader, class_weights, normalizers = \
+                create_multiscale_dataloaders(config, train_dfs, val_dfs, test_dfs)
+
             model = build_model(num_features, config.model)
-
-            run_name = f"{config.model.type}_{config.data.timeframe}_fold{fold_idx + 1}"
+            run_name = f"multiscale_{decision_tf}_fold{fold_idx + 1}"
             trainer = Trainer(model, config, class_weights, self.device, run_name=run_name)
 
             checkpoint_prefix = os.path.join(config.export.output_dir, f"fold{fold_idx + 1}_best")
@@ -70,19 +94,19 @@ class WalkForwardValidator:
                 checkpoint_prefix=checkpoint_prefix,
             )
 
-            evaluator = Evaluator(model, device=self.device, timeframe=config.data.timeframe)
+            evaluator = Evaluator(model, device=self.device, timeframe=decision_tf)
             price_cols = ["open_price", "high_price", "low_price", "close_price"]
-            prices_df = test_df[price_cols].reset_index(drop=True) if all(
-                c in test_df.columns for c in price_cols
+            prices_df = test_dfs[decision_tf][price_cols].reset_index(drop=True) if all(
+                c in test_dfs[decision_tf].columns for c in price_cols
             ) else None
 
             eval_result = evaluator.evaluate(test_loader, prices_df=prices_df)
 
             fold_summary = {
                 "fold": fold_idx + 1,
-                "train_rows": len(train_df),
-                "val_rows": len(val_df),
-                "test_rows": len(test_df),
+                "train_rows": len(train_dfs[decision_tf]),
+                "val_rows": len(val_dfs[decision_tf]),
+                "test_rows": len(test_dfs[decision_tf]),
                 "best_epoch": train_result["best_epoch"],
                 "best_val_f1": train_result["best_val_f1"],
                 "ml_metrics": {
@@ -93,7 +117,7 @@ class WalkForwardValidator:
             }
             if "financial" in eval_result:
                 fin = dict(eval_result["financial"])
-                fin.pop("trades", None)  # exclude per-trade list from summary JSON
+                fin.pop("trades", None)
                 fold_summary["financial_metrics"] = fin
 
             fold_results.append(fold_summary)
@@ -109,8 +133,10 @@ class WalkForwardValidator:
         output = {
             "config": {
                 "pair": config.data.pair_name,
-                "timeframe": config.data.timeframe,
+                "decision_timeframe": decision_tf,
+                "timeframes": config.data.timeframes,
                 "model_type": config.model.type,
+                "branch_encoder": config.model.branch_encoder,
             },
             "num_folds": len(fold_results),
             "best_fold": best_fold,

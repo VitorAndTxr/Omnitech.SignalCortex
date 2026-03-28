@@ -20,7 +20,8 @@ class DatabaseConfig:
 @dataclass
 class DataConfig:
     pair_name: str = "BTCUSDT"
-    timeframe: str = "5m"
+    decision_timeframe: str = "5m"
+    timeframes: List[str] = field(default_factory=lambda: ["5m", "15m", "1h"])
     feature_columns: List[str] = field(default_factory=list)
     label_column: str = "buy_signal"
     scaler: str = "robust"
@@ -29,22 +30,22 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    type: str = "lstm"
-    window_size: int = 120
-    hidden_size: int = 128
+    type: str = "multiscale"
+    branch_encoder: str = "lstm"                           # 'lstm' | 'tcn' | 'transformer'
+    branch_hidden_sizes: List[int] = field(default_factory=lambda: [128, 64, 64])
+    branch_window_sizes: List[int] = field(default_factory=lambda: [120, 60, 48])
     num_layers: int = 2
     dropout: float = 0.3
     bidirectional: bool = True
     use_attention: bool = True
-    # TCN-specific
+    # TCN-specific (used when branch_encoder='tcn')
     kernel_size: int = 3
     num_channels: List[int] = field(default_factory=lambda: [64, 64, 128, 128])
-    # Transformer-specific
+    # Transformer-specific (used when branch_encoder='transformer')
     nhead: int = 4
     dim_feedforward: int = 256
-    # MultiScale-specific
-    branch_hidden_sizes: List[int] = field(default_factory=lambda: [128, 64, 64])
-    branch_window_sizes: List[int] = field(default_factory=lambda: [120, 60, 48])
+    # Legacy field retained for standalone LSTMModel/TransformerModel classes (not used in multiscale path)
+    hidden_size: int = 128
 
 
 @dataclass
@@ -112,7 +113,8 @@ def _dict_to_config(raw: dict) -> Config:
     data_raw = raw.get("data", {})
     data = DataConfig(
         pair_name=data_raw.get("pair_name", "BTCUSDT"),
-        timeframe=data_raw.get("timeframe", "5m"),
+        decision_timeframe=data_raw.get("decision_timeframe", "5m"),
+        timeframes=data_raw.get("timeframes", ["5m", "15m", "1h"]),
         feature_columns=data_raw.get("feature_columns", []),
         label_column=data_raw.get("label_column", "buy_signal"),
         scaler=data_raw.get("scaler", "robust"),
@@ -121,9 +123,10 @@ def _dict_to_config(raw: dict) -> Config:
 
     model_raw = raw.get("model", {})
     model = ModelConfig(
-        type=model_raw.get("type", "lstm"),
-        window_size=model_raw.get("window_size", 120),
-        hidden_size=model_raw.get("hidden_size", 128),
+        type=model_raw.get("type", "multiscale"),
+        branch_encoder=model_raw.get("branch_encoder", "lstm"),
+        branch_hidden_sizes=model_raw.get("branch_hidden_sizes", [128, 64, 64]),
+        branch_window_sizes=model_raw.get("branch_window_sizes", [120, 60, 48]),
         num_layers=model_raw.get("num_layers", 2),
         dropout=model_raw.get("dropout", 0.3),
         bidirectional=model_raw.get("bidirectional", True),
@@ -132,8 +135,6 @@ def _dict_to_config(raw: dict) -> Config:
         num_channels=model_raw.get("num_channels", [64, 64, 128, 128]),
         nhead=model_raw.get("nhead", 4),
         dim_feedforward=model_raw.get("dim_feedforward", 256),
-        branch_hidden_sizes=model_raw.get("branch_hidden_sizes", [128, 64, 64]),
-        branch_window_sizes=model_raw.get("branch_window_sizes", [120, 60, 48]),
     )
 
     tr_raw = raw.get("training", {})

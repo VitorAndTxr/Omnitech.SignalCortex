@@ -2,52 +2,51 @@
 
 Python neural network training and export module for crypto trading signal classification. Part of the OmniBot system — Phase 2 of the NeuralDataFeed pipeline.
 
-Reads labeled OHLCV + technical indicator data from PostgreSQL, trains PyTorch models to classify BUY vs HOLD signals, validates with walk-forward temporal splits, and exports to ONNX for .NET inference.
+Reads labeled OHLCV + technical indicator data from PostgreSQL across three synchronized timeframes (5m, 15m, 1h), trains a multi-scale PyTorch model to classify BUY vs HOLD signals, validates with walk-forward temporal splits, and exports to ONNX for .NET inference.
 
 ## System Context
 
 ```mermaid
 graph LR
-    DB[(PostgreSQL\nmarket_data_features)] -->|psycopg2| SC[SignalCortex\nPython Training]
+    DB[(PostgreSQL\nmarket_data_features)] -->|psycopg2 — 3 timeframes| SC[SignalCortex\nPython Training]
     SC -->|model.onnx| NET[.NET Inference\nRisk Manager]
-    SC -->|normalizer.json| NET
+    SC -->|normalizer_5m/15m/1h.json| NET
     NDF[NeuralDataFeed\n.NET Worker] -->|writes| DB
 ```
 
-Phase 1 (`Omnitech.NeuralDataFeed`, .NET) continuously collects candlestick data and computes 30+ technical indicators with BUY/HOLD signal labels. This project consumes that data and produces ONNX models for downstream .NET inference.
+Phase 1 (`Omnitech.NeuralDataFeed`, .NET) continuously collects candlestick data and computes 30+ technical indicators with BUY/HOLD signal labels. This project consumes that data across three synchronized timeframes and produces ONNX models for downstream .NET inference.
 
 ## Project Structure
 
 ```
 Omnitech.SignalCortex/
 ├── configs/
-│   ├── default.yaml              # Base configuration (model, training, DB)
+│   ├── default.yaml              # Base configuration (multiscale model, training, DB)
 │   └── experiments/
-│       ├── lstm_5m.yaml          # LSTM on 5m timeframe
-│       ├── lstm_15m.yaml         # LSTM on 15m timeframe
-│       ├── tcn_5m.yaml           # TCN on 5m timeframe
-│       └── multiscale.yaml       # Multi-scale (5m + 15m + 1h)
+│       ├── multiscale_lstm.yaml       # Multi-scale with LSTM branch encoders
+│       ├── multiscale_tcn.yaml        # Multi-scale with TCN branch encoders
+│       └── multiscale_transformer.yaml # Multi-scale with Transformer branch encoders
 ├── data/
-│   ├── db.py                     # PostgreSQL connector and query layer
+│   ├── db.py                     # PostgreSQL connector — single and multi-timeframe queries
 │   ├── normalizer.py             # Feature scaling with .NET-compatible JSON export
-│   ├── dataset.py                # Sliding window PyTorch Dataset and DataLoader factory
+│   ├── dataset.py                # MultiScaleDataset: synchronized 3-timeframe windows
 │   └── splits.py                 # Walk-forward and simple chronological splits
 ├── models/
-│   ├── __init__.py               # BaseModel interface and build_model factory
-│   ├── lstm.py                   # Bi-LSTM + self-attention
-│   ├── tcn.py                    # Temporal Convolutional Network (causal + dilated)
-│   ├── transformer.py            # Transformer encoder with sinusoidal positional encoding
-│   └── multiscale.py             # Multi-scale LSTM (5m / 15m / 1h branches)
+│   ├── __init__.py               # build_model() factory — always returns MultiScaleModel
+│   ├── lstm.py                   # Bi-LSTM + self-attention (encoder building block)
+│   ├── tcn.py                    # Temporal Convolutional Network (encoder building block)
+│   ├── transformer.py            # Transformer encoder (encoder building block)
+│   └── multiscale.py             # MultiScaleModel: 3 branches + cross-attention classifier
 ├── training/
 │   ├── trainer.py                # Training loop, early stopping, LR scheduling, TensorBoard
 │   ├── evaluator.py              # ML metrics + financial backtesting (Sharpe, drawdown)
-│   └── walk_forward.py           # Walk-forward validation orchestrator
+│   └── walk_forward.py           # Walk-forward validation across 3 timeframes
 ├── export/
-│   └── onnx_export.py            # ONNX export + ONNX Runtime validation + normalizer JSON
+│   └── onnx_export.py            # ONNX export (3 inputs) + ONNX Runtime validation + normalizer JSONs
 ├── notebooks/
 │   └── exploration.ipynb         # EDA: label distribution, feature analysis, class separability
 ├── outputs/                      # Checkpoints, ONNX models, plots, walk-forward results
-├── tests/                        # Unit tests for all layers
+├── tests/                        # Unit tests for all layers (137 tests)
 ├── main.py                       # CLI entry point
 └── requirements.txt
 ```
@@ -78,17 +77,20 @@ database:
 
 data:
   pair_name: BTCUSDT
-  timeframe: "5m"
+  decision_timeframe: "5m"           # timeframe used for labels and fold boundaries
+  timeframes: ["5m", "15m", "1h"]    # all 3 timeframes consumed per training run
   label_column: buy_signal
   scaler: robust  # 'standard', 'robust', 'minmax'
 
 model:
-  type: lstm       # 'lstm', 'tcn', 'transformer', 'multiscale'
-  window_size: 120
-  hidden_size: 128
+  type: multiscale                   # only supported architecture
+  branch_encoder: lstm               # 'lstm', 'tcn', 'transformer'
+  branch_hidden_sizes: [128, 64, 64] # hidden size per branch (5m, 15m, 1h)
+  branch_window_sizes: [120, 60, 48] # lookback candles per branch (5m, 15m, 1h)
   num_layers: 2
   dropout: 0.3
   bidirectional: true
+  use_attention: true
 
 training:
   epochs: 100
@@ -117,7 +119,7 @@ python main.py train --config configs/default.yaml
 # Evaluate a saved checkpoint on the test set
 python main.py evaluate --config configs/default.yaml --checkpoint outputs/best_model.pt
 
-# Export checkpoint to ONNX + normalizer JSON for .NET inference
+# Export checkpoint to ONNX + normalizer JSONs for .NET inference
 python main.py export --config configs/default.yaml --checkpoint outputs/best_model.pt
 
 # Run walk-forward temporal validation (5+ folds, the gold standard)
@@ -130,51 +132,54 @@ python main.py eda
 ### Using Experiment Configs
 
 ```bash
-python main.py train --config configs/experiments/tcn_5m.yaml
-python main.py walk-forward --config configs/experiments/lstm_15m.yaml
+python main.py train --config configs/experiments/multiscale_tcn.yaml
+python main.py walk-forward --config configs/experiments/multiscale_transformer.yaml
 ```
 
-## Model Architectures
+## Model Architecture
 
-All models share a common interface: `forward(x: Tensor) -> Tensor` where input is `(batch, window_size, num_features)` and output is `(batch, 2)` logits for `[HOLD, BUY]`.
+SignalCortex uses a single architecture: `MultiScaleModel`. It processes three synchronized timeframes in parallel through independent encoder branches, then fuses the resulting embeddings for classification.
 
-### Bi-LSTM + Attention (`lstm`)
-
-```
-Input (B, 120, 35)
-  -> BatchNorm1d
-  -> Bi-LSTM (hidden=128, layers=2, dropout=0.3)
-  -> Self-Attention (weighted sum over timesteps)
-  -> Linear(256, 64) -> ReLU -> Dropout
-  -> Linear(64, 2)
-```
-
-### TCN (`tcn`)
+### MultiScaleModel
 
 ```
-Input (B, 120, 35)
-  -> 4× TemporalBlock (causal dilated conv, dilation=[1,2,4,8])
-     channels: [64, 64, 128, 128] — receptive field: 61 timesteps
-  -> GlobalAvgPool1d
-  -> Linear(128, 64) -> ReLU -> Dropout -> Linear(64, 2)
+Input: (x_5m, x_15m, x_1h)
+        (B, 120, F)  (B, 60, F)  (B, 48, F)
+
+  Branch 5m  ──┐
+  Branch 15m ──┼──> Concat (B, 256) -> Cross-Attention -> Classifier -> (B, 2)
+  Branch 1h  ──┘
+
+Each branch: encoder (LSTM / TCN / Transformer) -> Linear projection -> (B, hidden_size)
+Classifier: Linear(256, 128) -> ReLU -> Dropout -> Linear(128, 64) -> ReLU -> Linear(64, 2)
 ```
 
-### Transformer (`transformer`)
+The branch encoder type is configurable via `model.branch_encoder`:
 
+| Encoder | Description |
+|---------|-------------|
+| `lstm` | Bidirectional LSTM + self-attention; default |
+| `tcn` | Causal dilated TCN + global average pool |
+| `transformer` | TransformerEncoder + mean pooling |
+
+All three encoders produce the same output shape `(B, hidden_size)`, ensuring `MultiScaleModel` is encoder-agnostic. `hidden_size` per branch is controlled by `branch_hidden_sizes`.
+
+### Why Multi-Scale
+
+The 5m branch captures short-term momentum and entry signals. The 15m branch provides intermediate trend context. The 1h branch anchors the model to the prevailing macro regime. Labels (BUY/HOLD) are derived from the 5m timeframe (decision timeframe); 15m and 1h contribute context only.
+
+## Data Pipeline
+
+```mermaid
+graph LR
+    DB[(PostgreSQL)] -->|fetch_multiscale_features| DF["dict[str, DataFrame]\n{'5m', '15m', '1h'}"]
+    DF -->|1 normalizer per TF| MSD["MultiScaleDataset\n(x_5m, x_15m, x_1h, label)"]
+    MSD -->|DataLoader| TR["Trainer / Evaluator\nforward(x_5m, x_15m, x_1h)"]
 ```
-Input (B, 120, 35)
-  -> Linear projection (35 -> 128)
-  -> Sinusoidal positional encoding
-  -> TransformerEncoder (d_model=128, nhead=4, dim_ff=256, layers=2)
-  -> Mean pooling over sequence
-  -> Linear(128, 64) -> ReLU -> Dropout -> Linear(64, 2)
-```
 
-Note: window_size must be ≤ 120 on RTX 2060 to avoid VRAM exhaustion.
+`MultiScaleDataset` synchronizes windows using `np.searchsorted` on timestamps: for each decision candle, it finds the last candle at or before that timestamp in each timeframe, then extracts a backwards-looking window of the configured depth. Samples without sufficient history in any timeframe are discarded.
 
-### MultiScale (`multiscale`)
-
-Three independent LSTM branches encoding 5m, 15m, and 1h windows simultaneously. Branch embeddings are concatenated before classification. Requires `MultiScaleDataset`. Validate single-scale models first.
+Each timeframe gets its own `FeatureNormalizer`, fit independently on its training data. This is necessary because feature distributions differ across scales (e.g., OBV in 5m vs 1h).
 
 ## Training Details
 
@@ -205,6 +210,8 @@ Single train/val/test splits are insufficient for time series. The walk-forward 
 - Validation: last 14 days of the training window
 - Test window: 1 month following training
 - Step: 1 month forward per fold
+
+Fold boundaries are determined by the decision timeframe (5m). The same absolute date ranges are applied to all three timeframes, so all branches see the same market period within each fold.
 
 Results are aggregated (mean ± std per metric) and saved to `outputs/walk_forward_results.json`.
 
@@ -268,15 +275,27 @@ Sharpe is annualized using `sqrt(periods_per_year) * mean / std`:
 
 ## ONNX Export
 
-The export workflow produces two artifacts for .NET inference:
+The export workflow produces four artifacts for .NET inference:
 
 ```bash
 python main.py export --config configs/default.yaml --checkpoint outputs/best_model.pt
-# outputs/model.onnx       — ONNX model (opset 17, dynamic batch dimension)
-# outputs/normalizer.json  — Normalizer parameters for pre-processing in .NET
+# outputs/model.onnx              — ONNX model (opset 17, 3 input nodes, dynamic batch)
+# outputs/normalizer_5m.json      — 5m normalizer parameters
+# outputs/normalizer_15m.json     — 15m normalizer parameters
+# outputs/normalizer_1h.json      — 1h normalizer parameters
 ```
 
-`normalizer.json` schema:
+ONNX input nodes:
+
+| Node | Shape | Description |
+|------|-------|-------------|
+| `features_5m` | `(batch, 120, F)` | 5-minute window |
+| `features_15m` | `(batch, 60, F)` | 15-minute window |
+| `features_1h` | `(batch, 48, F)` | 1-hour window |
+
+Output: `logits` — shape `(batch, 2)` — `[HOLD, BUY]` class scores.
+
+Each normalizer JSON follows this schema:
 ```json
 {
   "scaler_type": "robust",
@@ -289,7 +308,9 @@ python main.py export --config configs/default.yaml --checkpoint outputs/best_mo
 }
 ```
 
-Both files are required for correct .NET inference.
+All four files are required for correct .NET inference. Apply the normalizer matching each input's timeframe before passing data to the model.
+
+> **Breaking change from v0.1.0:** Old checkpoints (single-scale) are incompatible with this version. Retrain after upgrading.
 
 ## Feature Set
 
@@ -307,31 +328,34 @@ The default config uses 37 features from the `market_data_features` table:
 
 Bounded indicators (`rsi_14`, `stoch_rsi_k/d`, `bb_pctb`, `sr_zone_position`, `price_ema9_ratio`, `price_ema21_ratio`) are excluded from scaling via `no_scale_columns`.
 
+The same 37 features are used for all three timeframes. Each timeframe normalizes them independently.
+
 ## Testing
 
 ```bash
 python -m pytest tests/ -v
 ```
 
-Tests cover: config loading, normalizer fit/transform/export, chronological splits, model forward passes (all architectures), evaluator metrics, ONNX export validity, dataset windowing, and trainer convergence.
+137 tests cover: config loading, normalizer fit/transform/export (per-timeframe isolation), chronological splits, `MultiScaleDataset` synchronization and edge cases, all branch encoder output shapes, evaluator metrics, ONNX 3-input export and ONNX Runtime validation, and trainer 4-tuple batch handling.
 
 ## GPU Constraints (RTX 2060, 6GB VRAM)
 
 | Setting | Safe Limit |
 |---|---|
 | batch_size | ≤ 256 |
-| window_size (LSTM/TCN) | ≤ 240 |
-| window_size (Transformer) | ≤ 120 |
-| LSTM hidden_size | ≤ 256 |
+| branch_window_sizes (LSTM/TCN) | ≤ 240 per branch |
+| branch_window_sizes (Transformer) | ≤ 120 per branch |
+| branch_hidden_sizes | ≤ 256 per branch |
 | num_layers | ≤ 3 |
 
-Monitor VRAM during Transformer training: `nvidia-smi dmon -s u -d 5`.
+Monitor VRAM during Transformer branch training: `nvidia-smi dmon -s u -d 5`.
 
 ## Data Integrity Rules
 
 These constraints are enforced by the pipeline and must not be violated:
 
 1. **No temporal shuffling** — chronological order is preserved across all splits. DataLoader `shuffle=False`.
-2. **Normalizer fit on train only** — `fit()` is called once per fold, on training data. Val/test use the same fitted parameters.
+2. **Normalizer fit on train only** — `fit()` is called once per fold per timeframe, on training data only. Val/test use the same fitted parameters.
 3. **Walk-forward over single split** — single-split results are insufficient; 5+ folds is the minimum for production decisions.
 4. **No future data in features** — all indicators in `market_data_features` are computed from the candle's own and prior candles only.
+5. **Fold boundaries from decision timeframe** — walk-forward splits are computed on the 5m (decision) timeframe; the same absolute date ranges are applied to 15m and 1h.
