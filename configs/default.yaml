@@ -1,0 +1,99 @@
+# Omnitech.SignalCortex — Default configuration
+# DB password is loaded from DB_PASSWORD env var; the 'password' field below is ignored if env var is set.
+
+database:
+  host: localhost
+  port: 5432
+  dbname: market_data_db
+  user: postgres
+  password: ""  # set DB_PASSWORD env var instead of hardcoding
+
+data:
+  pair_name: BTCUSDT
+  timeframe: "5m"
+  feature_columns:
+    - rsi_14
+    - rsi_7
+    - stoch_rsi_k
+    - stoch_rsi_d
+    - roc_14
+    - ema_9
+    - ema_21
+    - ema_50
+    - ema_200
+    - macd_line
+    - macd_signal
+    - macd_histogram
+    - adx_14
+    - bb_upper
+    - bb_middle
+    - bb_lower
+    - bb_pctb
+    - atr_14
+    - obv
+    - vwap
+    - volume_sma_20
+    - cmf_20
+    - price_ema9_ratio
+    - price_ema21_ratio
+    - macd_hist_slope
+    - dist_support_pct
+    - dist_resistance_pct
+    - support_strength
+    - resistance_strength
+    - sr_zone_position
+    - num_sr_within_1pct
+    - open_price
+    - high_price
+    - low_price
+    - close_price
+    - volume
+  label_column: buy_signal
+  scaler: robust  # 'standard', 'robust', or 'minmax'
+  no_scale_columns:
+    - rsi_14
+    - rsi_7
+    - stoch_rsi_k
+    - stoch_rsi_d
+    - bb_pctb
+    - sr_zone_position
+    - price_ema9_ratio
+    - price_ema21_ratio
+
+model:
+  type: lstm  # 'lstm', 'tcn', 'transformer', 'multiscale'
+  window_size: 120
+  hidden_size: 128
+  num_layers: 2
+  dropout: 0.3
+  bidirectional: true
+  use_attention: true
+  # TCN-specific
+  kernel_size: 3
+  num_channels: [64, 64, 128, 128]
+  # Transformer-specific
+  nhead: 4
+  dim_feedforward: 256
+  # MultiScale-specific
+  branch_hidden_sizes: [128, 64, 64]
+  branch_window_sizes: [120, 60, 48]
+
+training:
+  epochs: 100
+  batch_size: 256
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  scheduler: reduce_on_plateau  # 'reduce_on_plateau', 'cosine', 'step'
+  scheduler_patience: 5
+  scheduler_factor: 0.5
+  early_stopping_patience: 15
+  auto_class_weights: true
+  walk_forward:
+    train_months: 3
+    test_months: 1
+    step_months: 1
+    min_train_samples: 10000
+
+export:
+  onnx_opset: 17
+  output_dir: outputs/

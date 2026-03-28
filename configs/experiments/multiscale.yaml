@@ -1,0 +1,14 @@
+data:
+  pair_name: BTCUSDT
+  timeframe: "5m"
+
+model:
+  type: multiscale
+  dropout: 0.3
+  branch_hidden_sizes: [128, 64, 64]
+  branch_window_sizes: [120, 60, 48]
+
+training:
+  epochs: 100
+  batch_size: 128  # lower due to multi-branch memory usage
+  learning_rate: 0.0005

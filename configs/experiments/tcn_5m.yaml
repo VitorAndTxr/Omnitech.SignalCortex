@@ -1,0 +1,15 @@
+data:
+  pair_name: BTCUSDT
+  timeframe: "5m"
+
+model:
+  type: tcn
+  window_size: 120
+  dropout: 0.2
+  kernel_size: 3
+  num_channels: [64, 64, 128, 128]
+
+training:
+  epochs: 100
+  batch_size: 256
+  learning_rate: 0.001
