@@ -10,6 +10,28 @@ import psycopg2.extras
 from configs.config import DatabaseConfig
 
 
+_SR_FILL_DEFAULTS = {
+    "dist_support_pct": 0.0,
+    "dist_resistance_pct": 0.0,
+    "support_strength": 0,
+    "resistance_strength": 0,
+    "sr_zone_position": 0.5,
+    "num_sr_within_1pct": 0,
+    "nearest_support": 0.0,
+    "nearest_resistance": 0.0,
+    # bb_pctb can be NaN when Bollinger Band width is zero
+    "bb_pctb": 0.5,
+}
+
+
+def _fill_sr_nulls(df: pd.DataFrame) -> pd.DataFrame:
+    """Fill S/R feature nulls — legitimately missing when no levels exist before a candle."""
+    for col, default in _SR_FILL_DEFAULTS.items():
+        if col in df.columns:
+            df[col] = df[col].fillna(default)
+    return df
+
+
 class DatabaseConnection:
     def __init__(self, config: DatabaseConfig):
         self._config = config
@@ -89,6 +111,7 @@ class DatabaseConnection:
             return df
 
         df["candle_open_time"] = pd.to_datetime(df["candle_open_time"])
+        _fill_sr_nulls(df)
 
         missing = df[feature_columns].isnull().any()
         if missing.any():
@@ -145,6 +168,7 @@ class DatabaseConnection:
             return df
 
         df["candle_open_time"] = pd.to_datetime(df["candle_open_time"])
+        _fill_sr_nulls(df)
 
         missing = df[feature_columns].isnull().any()
         if missing.any():

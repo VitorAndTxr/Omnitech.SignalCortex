@@ -54,6 +54,15 @@ coverage.xml
 # Logs
 *.log
 
+# Model outputs
+outputs/
+*.pt
+*.pkl
+*.onnx
+
+# TensorBoard
+runs/
+
 # OS
 Thumbs.db
 Desktop.ini

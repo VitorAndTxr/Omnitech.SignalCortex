@@ -20,12 +20,17 @@ class DatabaseConfig:
 @dataclass
 class DataConfig:
     pair_name: str = "BTCUSDT"
+    pair_names: List[str] = field(default_factory=list)  # multi-pair; if empty, uses pair_name
     decision_timeframe: str = "5m"
     timeframes: List[str] = field(default_factory=lambda: ["5m", "15m", "1h"])
     feature_columns: List[str] = field(default_factory=list)
     label_column: str = "buy_signal"
     scaler: str = "robust"
     no_scale_columns: List[str] = field(default_factory=list)
+
+    def get_pair_names(self) -> List[str]:
+        """Return list of pairs to train on."""
+        return self.pair_names if self.pair_names else [self.pair_name]
 
 
 @dataclass
@@ -67,6 +72,8 @@ class TrainingConfig:
     scheduler_factor: float = 0.5
     early_stopping_patience: int = 15
     auto_class_weights: bool = True
+    pos_weight: float = 0.0  # if > 0, overrides auto_class_weights
+    warmup_epochs: int = 0
     walk_forward: WalkForwardConfig = field(default_factory=WalkForwardConfig)
 
 
@@ -113,6 +120,7 @@ def _dict_to_config(raw: dict) -> Config:
     data_raw = raw.get("data", {})
     data = DataConfig(
         pair_name=data_raw.get("pair_name", "BTCUSDT"),
+        pair_names=data_raw.get("pair_names", []),
         decision_timeframe=data_raw.get("decision_timeframe", "5m"),
         timeframes=data_raw.get("timeframes", ["5m", "15m", "1h"]),
         feature_columns=data_raw.get("feature_columns", []),
@@ -155,6 +163,8 @@ def _dict_to_config(raw: dict) -> Config:
         scheduler_factor=tr_raw.get("scheduler_factor", 0.5),
         early_stopping_patience=tr_raw.get("early_stopping_patience", 15),
         auto_class_weights=tr_raw.get("auto_class_weights", True),
+        pos_weight=tr_raw.get("pos_weight", 0.0),
+        warmup_epochs=tr_raw.get("warmup_epochs", 0),
         walk_forward=wf,
     )
 

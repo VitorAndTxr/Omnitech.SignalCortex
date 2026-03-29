@@ -1,0 +1,31 @@
+# Experiment: Multi-pair v2 — larger architecture + ATR-based labels (3:1 ratio)
+# Changes from v1: hidden [256,128,128], 3 layers, ATR P50 x3 labels
+
+data:
+  pair_names:
+    - BTCUSDT
+    - BNBUSDT
+    - XRPUSDT
+    - ADAUSDT
+    - SOLUSDT
+    - DOGEUSDT
+    - DOTUSDT
+    - AVAXUSDT
+    - LINKUSDT
+
+model:
+  branch_hidden_sizes: [256, 128, 128]
+  num_layers: 3
+
+training:
+  learning_rate: 0.003
+  batch_size: 512
+  scheduler: one_cycle
+  warmup_epochs: 0
+  auto_class_weights: false
+  pos_weight: 3.0
+  epochs: 60
+  early_stopping_patience: 15
+
+export:
+  output_dir: outputs/multi_pair_v2_large/
