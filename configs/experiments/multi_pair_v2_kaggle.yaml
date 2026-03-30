@@ -18,12 +18,12 @@ model:
   num_layers: 3
 
 training:
-  learning_rate: 0.003
+  learning_rate: 0.0006
   batch_size: 2048
   scheduler: one_cycle
   warmup_epochs: 0
   auto_class_weights: false
-  pos_weight: 3.0
+  pos_weight: 7.0
   epochs: 60
   early_stopping_patience: 15
 
