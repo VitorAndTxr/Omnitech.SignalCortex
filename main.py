@@ -14,12 +14,21 @@ import os
 import sys
 
 
+def _get_data_source(args, config):
+    """Return a context-manager data source — DB or Parquet based on CLI args."""
+    if hasattr(args, "parquet") and args.parquet:
+        from data.db import ParquetDataSource
+        return ParquetDataSource(args.parquet)
+    else:
+        from data.db import DatabaseConnection
+        return DatabaseConnection(config.database)
+
+
 def cmd_train(args):
     import torch
 
     from configs.config import load_config
     from data.dataset import create_multiscale_dataloaders
-    from data.db import DatabaseConnection
     from data.splits import simple_split
     from models import build_model
     from training.trainer import Trainer
@@ -35,7 +44,7 @@ def cmd_train(args):
     from data.splits import apply_date_split
 
     all_pair_dfs = {}
-    with DatabaseConnection(config.database) as db:
+    with _get_data_source(args, config) as db:
         for pair in pair_names:
             print(f"  Fetching {pair}...")
             all_pair_dfs[pair] = db.fetch_multiscale_features(
@@ -123,7 +132,6 @@ def cmd_evaluate(args):
 
     from configs.config import load_config
     from data.dataset import create_multiscale_dataloaders, _build_multiscale_dataset
-    from data.db import DatabaseConnection
     from data.normalizer import FeatureNormalizer
     from data.splits import simple_split, apply_date_split
     from models import build_model
@@ -133,7 +141,7 @@ def cmd_evaluate(args):
     config = load_config(args.config)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    with DatabaseConnection(config.database) as db:
+    with _get_data_source(args, config) as db:
         dfs = db.fetch_multiscale_features(
             pair_name=config.data.pair_name,
             timeframes=config.data.timeframes,
@@ -219,7 +227,6 @@ def cmd_backtest(args):
 
     from configs.config import load_config
     from data.dataset import create_multiscale_dataloaders, _build_multiscale_dataset
-    from data.db import DatabaseConnection
     from data.normalizer import FeatureNormalizer
     from data.splits import simple_split, apply_date_split
     from models import build_model
@@ -232,7 +239,7 @@ def cmd_backtest(args):
     pair = args.pair
     print(f"Loading data for {pair}...")
 
-    with DatabaseConnection(config.database) as db:
+    with _get_data_source(args, config) as db:
         dfs = db.fetch_multiscale_features(
             pair_name=pair,
             timeframes=config.data.timeframes,
@@ -355,17 +362,20 @@ def main():
     p_train = subparsers.add_parser("train", help="Train model with simple chronological split")
     p_train.add_argument("--config", required=True, help="Path to YAML config file")
     p_train.add_argument("--resume", default=None, help="Path to .pt checkpoint to resume training from")
+    p_train.add_argument("--parquet", default=None, help="Path to parquet directory (instead of DB)")
 
     # evaluate
     p_eval = subparsers.add_parser("evaluate", help="Evaluate a trained checkpoint on test set")
     p_eval.add_argument("--config", required=True)
     p_eval.add_argument("--checkpoint", required=True, help="Path to .pt checkpoint file")
+    p_eval.add_argument("--parquet", default=None, help="Path to parquet directory (instead of DB)")
 
     # backtest
     p_bt = subparsers.add_parser("backtest", help="Simulate trades with multiple exit strategies")
     p_bt.add_argument("--config", required=True)
     p_bt.add_argument("--checkpoint", required=True, help="Path to .pt checkpoint file")
     p_bt.add_argument("--pair", required=True, help="Trading pair to backtest on (e.g. ETHUSDT)")
+    p_bt.add_argument("--parquet", default=None, help="Path to parquet directory (instead of DB)")
     p_bt.add_argument("--tp", type=float, default=1.6, help="Take profit %% (default: 1.6)")
     p_bt.add_argument("--sl", type=float, default=0.4, help="Stop loss %% (default: 0.4)")
     p_bt.add_argument("--trailing", type=float, default=0.5, help="Trailing stop %% (default: 0.5)")

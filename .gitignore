@@ -60,6 +60,9 @@ outputs/
 *.pkl
 *.onnx
 
+# Parquet data exports
+data/parquet/
+
 # TensorBoard
 runs/
 

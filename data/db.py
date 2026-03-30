@@ -224,3 +224,96 @@ class DatabaseConnection:
             cur.execute(query, params)
             rows = cur.fetchall()
         return pd.DataFrame(rows)
+
+
+class ParquetDataSource:
+    """Drop-in replacement for DatabaseConnection that reads from Parquet files."""
+
+    def __init__(self, parquet_dir: str):
+        self._dir = parquet_dir
+        self._cache: Dict[str, pd.DataFrame] = {}
+
+    def _load(self, timeframe: str) -> pd.DataFrame:
+        if timeframe not in self._cache:
+            path = f"{self._dir}/features_{timeframe}.parquet"
+            df = pd.read_parquet(path)
+            df["candle_open_time"] = pd.to_datetime(df["candle_open_time"])
+            self._cache[timeframe] = df
+        return self._cache[timeframe]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self._cache.clear()
+
+    def fetch_features(
+        self,
+        pair_name: str,
+        timeframe: str,
+        feature_columns: List[str],
+        label_column: str = "buy_signal",
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> pd.DataFrame:
+        df = self._load(timeframe)
+        mask = (df["pair_name"] == pair_name) & df[label_column].notna() & df["rsi_14"].notna()
+        if start_date is not None:
+            mask &= df["candle_open_time"] >= pd.Timestamp(start_date)
+        if end_date is not None:
+            mask &= df["candle_open_time"] < pd.Timestamp(end_date)
+
+        price_cols = {"open_price", "high_price", "low_price", "close_price"}
+        select_cols = ["candle_open_time"] + feature_columns + [label_column]
+        for col in price_cols:
+            if col not in feature_columns:
+                select_cols.append(col)
+
+        result = df.loc[mask, select_cols].sort_values("candle_open_time").reset_index(drop=True)
+        _fill_sr_nulls(result)
+        return result
+
+    def _fetch_context_features(
+        self,
+        pair_name: str,
+        timeframe: str,
+        feature_columns: List[str],
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> pd.DataFrame:
+        df = self._load(timeframe)
+        mask = (df["pair_name"] == pair_name) & df["rsi_14"].notna()
+        if start_date is not None:
+            mask &= df["candle_open_time"] >= pd.Timestamp(start_date)
+        if end_date is not None:
+            mask &= df["candle_open_time"] < pd.Timestamp(end_date)
+
+        price_cols = {"open_price", "high_price", "low_price", "close_price"}
+        select_cols = ["candle_open_time"] + feature_columns
+        for col in price_cols:
+            if col not in feature_columns:
+                select_cols.append(col)
+
+        result = df.loc[mask, select_cols].sort_values("candle_open_time").reset_index(drop=True)
+        _fill_sr_nulls(result)
+        return result
+
+    def fetch_multiscale_features(
+        self,
+        pair_name: str,
+        timeframes: List[str],
+        decision_timeframe: str,
+        feature_columns: List[str],
+        label_column: str = "buy_signal",
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+    ) -> Dict[str, pd.DataFrame]:
+        result: Dict[str, pd.DataFrame] = {}
+        for tf in timeframes:
+            if tf == decision_timeframe:
+                result[tf] = self.fetch_features(
+                    pair_name, tf, feature_columns, label_column, start_date, end_date)
+            else:
+                result[tf] = self._fetch_context_features(
+                    pair_name, tf, feature_columns, start_date, end_date)
+        return result
