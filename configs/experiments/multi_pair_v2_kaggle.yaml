@@ -1,0 +1,31 @@
+# Experiment: Multi-pair v2 — large model for Kaggle T4 (16 GB VRAM)
+# Same as v2_large but with batch_size 1024
+
+data:
+  pair_names:
+    - BTCUSDT
+    - BNBUSDT
+    - XRPUSDT
+    - ADAUSDT
+    - SOLUSDT
+    - DOGEUSDT
+    - DOTUSDT
+    - AVAXUSDT
+    - LINKUSDT
+
+model:
+  branch_hidden_sizes: [256, 128, 128]
+  num_layers: 3
+
+training:
+  learning_rate: 0.003
+  batch_size: 2048
+  scheduler: one_cycle
+  warmup_epochs: 0
+  auto_class_weights: false
+  pos_weight: 3.0
+  epochs: 60
+  early_stopping_patience: 15
+
+export:
+  output_dir: outputs/multi_pair_v2_kaggle/

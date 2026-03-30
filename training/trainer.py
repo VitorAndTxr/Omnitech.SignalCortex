@@ -46,6 +46,11 @@ class Trainer:
         self.device = device
         self.config = config
 
+        # Multi-GPU support
+        if torch.cuda.device_count() > 1:
+            print(f"Using {torch.cuda.device_count()} GPUs via DataParallel")
+            self.model = nn.DataParallel(self.model)
+
         weight_tensor = (
             torch.tensor(class_weights, dtype=torch.float32).to(device)
             if class_weights is not None
@@ -53,7 +58,7 @@ class Trainer:
         )
         self.criterion = nn.CrossEntropyLoss(weight=weight_tensor)
         self.optimizer = torch.optim.AdamW(
-            model.parameters(),
+            self.model.parameters(),
             lr=config.training.learning_rate,
             weight_decay=config.training.weight_decay,
         )
@@ -182,9 +187,11 @@ class Trainer:
             if val_metrics["f1"] > self._best_val_f1:
                 self._best_val_f1 = val_metrics["f1"]
                 self._best_checkpoint_path = f"{checkpoint_prefix}.pt"
+                # Unwrap DataParallel for portable checkpoints
+                model_to_save = self.model.module if isinstance(self.model, nn.DataParallel) else self.model
                 torch.save({
                     "epoch": epoch,
-                    "model_state_dict": self.model.state_dict(),
+                    "model_state_dict": model_to_save.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
                     "val_f1": val_metrics["f1"],
                     "config": self.config,
@@ -216,8 +223,9 @@ class Trainer:
 
     def load_checkpoint(self, checkpoint_path: str) -> int:
         """Load model and optimizer state from checkpoint. Returns the epoch number."""
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        self.model.load_state_dict(checkpoint["model_state_dict"])
+        checkpoint = torch.load(checkpoint_path, map_location=self.device, weights_only=False)
+        target = self.model.module if isinstance(self.model, nn.DataParallel) else self.model
+        target.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         epoch = checkpoint.get("epoch", 0)
         self._best_val_f1 = checkpoint.get("val_f1", -1.0)
