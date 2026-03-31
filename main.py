@@ -89,6 +89,10 @@ def cmd_train(args):
     train_loader, val_loader, test_loader, class_weights, normalizers = \
         create_multiscale_dataloaders(config, train_dfs, val_dfs, test_dfs)
 
+    # CLI --pw overrides config pos_weight
+    if hasattr(args, "pw") and args.pw is not None:
+        config.training.pos_weight = args.pw
+
     # Override class weights with pos_weight if configured
     if config.training.pos_weight > 0:
         import numpy as np
@@ -237,6 +241,13 @@ def cmd_backtest(args):
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     pair = args.pair
+    dt = config.data.decision_timeframe
+
+    # Use ATR-based labeling thresholds for the pair when CLI defaults are used
+    threshold = config.labeling.get_threshold(pair, dt)
+    tp = threshold.target_percent if args.tp == 1.6 else args.tp
+    sl = threshold.stop_percent if args.sl == 0.4 else args.sl
+
     print(f"Loading data for {pair}...")
 
     with _get_data_source(args, config) as db:
@@ -248,7 +259,6 @@ def cmd_backtest(args):
             label_column=config.data.label_column,
         )
 
-    dt = config.data.decision_timeframe
     df_decision = dfs[dt]
     train_decision, val_decision, test_decision = simple_split(df_decision)
 
@@ -308,8 +318,8 @@ def cmd_backtest(args):
     currency = "BTC" if is_btc_pair else "USD"
 
     bt_config = BacktestConfig(
-        tp_pct=args.tp,
-        sl_pct=args.sl,
+        tp_pct=tp,
+        sl_pct=sl,
         trailing_pct=args.trailing,
         fee_pct=args.fee,
         initial_capital=initial_capital,
@@ -363,6 +373,7 @@ def main():
     p_train.add_argument("--config", required=True, help="Path to YAML config file")
     p_train.add_argument("--resume", default=None, help="Path to .pt checkpoint to resume training from")
     p_train.add_argument("--parquet", default=None, help="Path to parquet directory (instead of DB)")
+    p_train.add_argument("--pw", type=float, default=None, help="Override pos_weight (e.g. --pw 5.0)")
 
     # evaluate
     p_eval = subparsers.add_parser("evaluate", help="Evaluate a trained checkpoint on test set")

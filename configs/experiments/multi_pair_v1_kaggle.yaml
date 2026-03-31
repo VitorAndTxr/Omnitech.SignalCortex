@@ -19,7 +19,7 @@ training:
   scheduler: one_cycle
   warmup_epochs: 0
   auto_class_weights: false
-  pos_weight: 6.0
+  pos_weight: 7.0
   epochs: 30
   early_stopping_patience: 15
 

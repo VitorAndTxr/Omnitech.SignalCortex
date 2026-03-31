@@ -14,13 +14,13 @@ data:
     - LINKUSDT
 
 training:
-  learning_rate: 0.0006
+  learning_rate: 0.001
   batch_size: 512
   scheduler: one_cycle
   warmup_epochs: 0
   auto_class_weights: false
-  pos_weight: 6.0
-  epochs: 60
+  pos_weight: 7.0
+  epochs: 30
   early_stopping_patience: 15
 
 export:

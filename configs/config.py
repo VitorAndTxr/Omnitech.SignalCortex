@@ -84,12 +84,28 @@ class ExportConfig:
 
 
 @dataclass
+class LabelingThreshold:
+    target_percent: float = 1.6
+    stop_percent: float = 0.4
+
+
+@dataclass
+class LabelingConfig:
+    default: LabelingThreshold = field(default_factory=LabelingThreshold)
+    overrides: dict = field(default_factory=dict)  # {("BTCUSDT","5m"): LabelingThreshold, ...}
+
+    def get_threshold(self, pair_name: str, timeframe: str) -> LabelingThreshold:
+        return self.overrides.get((pair_name, timeframe), self.default)
+
+
+@dataclass
 class Config:
     database: DatabaseConfig = field(default_factory=DatabaseConfig)
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
+    labeling: LabelingConfig = field(default_factory=LabelingConfig)
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -174,7 +190,22 @@ def _dict_to_config(raw: dict) -> Config:
         output_dir=exp_raw.get("output_dir", "outputs/"),
     )
 
-    return Config(database=db, data=data, model=model, training=training, export=export)
+    lab_raw = raw.get("labeling", {})
+    lab_default_raw = lab_raw.get("default", {})
+    lab_default = LabelingThreshold(
+        target_percent=lab_default_raw.get("target_percent", 1.6),
+        stop_percent=lab_default_raw.get("stop_percent", 0.4),
+    )
+    lab_overrides = {}
+    for entry in lab_raw.get("overrides", []):
+        key = (entry["pair_name"], entry["timeframe"])
+        lab_overrides[key] = LabelingThreshold(
+            target_percent=entry["target_percent"],
+            stop_percent=entry["stop_percent"],
+        )
+    labeling = LabelingConfig(default=lab_default, overrides=lab_overrides)
+
+    return Config(database=db, data=data, model=model, training=training, export=export, labeling=labeling)
 
 
 def load_config(path: str) -> Config:

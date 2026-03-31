@@ -96,3 +96,39 @@ training:
 export:
   onnx_opset: 17
   output_dir: outputs/
+
+labeling:
+  default:
+    target_percent: 1.6
+    stop_percent: 0.4
+  overrides:
+    - { pair_name: BTCUSDT,  timeframe: "5m",  target_percent: 1.44, stop_percent: 0.48 }
+    - { pair_name: BTCUSDT,  timeframe: "15m", target_percent: 2.76, stop_percent: 0.92 }
+    - { pair_name: BTCUSDT,  timeframe: "1h",  target_percent: 5.96, stop_percent: 1.99 }
+    - { pair_name: ETHUSDT,  timeframe: "5m",  target_percent: 1.95, stop_percent: 0.65 }
+    - { pair_name: ETHUSDT,  timeframe: "15m", target_percent: 3.72, stop_percent: 1.24 }
+    - { pair_name: ETHUSDT,  timeframe: "1h",  target_percent: 7.97, stop_percent: 2.66 }
+    - { pair_name: BNBUSDT,  timeframe: "5m",  target_percent: 1.75, stop_percent: 0.58 }
+    - { pair_name: BNBUSDT,  timeframe: "15m", target_percent: 3.25, stop_percent: 1.08 }
+    - { pair_name: BNBUSDT,  timeframe: "1h",  target_percent: 6.96, stop_percent: 2.32 }
+    - { pair_name: XRPUSDT,  timeframe: "5m",  target_percent: 2.25, stop_percent: 0.75 }
+    - { pair_name: XRPUSDT,  timeframe: "15m", target_percent: 4.20, stop_percent: 1.40 }
+    - { pair_name: XRPUSDT,  timeframe: "1h",  target_percent: 8.93, stop_percent: 2.98 }
+    - { pair_name: ADAUSDT,  timeframe: "5m",  target_percent: 2.68, stop_percent: 0.89 }
+    - { pair_name: ADAUSDT,  timeframe: "15m", target_percent: 4.94, stop_percent: 1.65 }
+    - { pair_name: ADAUSDT,  timeframe: "1h",  target_percent: 10.42, stop_percent: 3.47 }
+    - { pair_name: SOLUSDT,  timeframe: "5m",  target_percent: 3.02, stop_percent: 1.01 }
+    - { pair_name: SOLUSDT,  timeframe: "15m", target_percent: 5.59, stop_percent: 1.86 }
+    - { pair_name: SOLUSDT,  timeframe: "1h",  target_percent: 11.65, stop_percent: 3.88 }
+    - { pair_name: DOGEUSDT, timeframe: "5m",  target_percent: 2.71, stop_percent: 0.90 }
+    - { pair_name: DOGEUSDT, timeframe: "15m", target_percent: 5.06, stop_percent: 1.69 }
+    - { pair_name: DOGEUSDT, timeframe: "1h",  target_percent: 10.76, stop_percent: 3.59 }
+    - { pair_name: DOTUSDT,  timeframe: "5m",  target_percent: 2.72, stop_percent: 0.91 }
+    - { pair_name: DOTUSDT,  timeframe: "15m", target_percent: 4.98, stop_percent: 1.66 }
+    - { pair_name: DOTUSDT,  timeframe: "1h",  target_percent: 10.42, stop_percent: 3.47 }
+    - { pair_name: AVAXUSDT, timeframe: "5m",  target_percent: 3.00, stop_percent: 1.00 }
+    - { pair_name: AVAXUSDT, timeframe: "15m", target_percent: 5.52, stop_percent: 1.84 }
+    - { pair_name: AVAXUSDT, timeframe: "1h",  target_percent: 11.58, stop_percent: 3.86 }
+    - { pair_name: LINKUSDT, timeframe: "5m",  target_percent: 2.97, stop_percent: 0.99 }
+    - { pair_name: LINKUSDT, timeframe: "15m", target_percent: 5.41, stop_percent: 1.80 }
+    - { pair_name: LINKUSDT, timeframe: "1h",  target_percent: 11.21, stop_percent: 3.74 }
