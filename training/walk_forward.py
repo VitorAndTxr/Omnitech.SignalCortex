@@ -108,7 +108,7 @@ class WalkForwardValidator:
                 "val_rows": len(val_dfs[decision_tf]),
                 "test_rows": len(test_dfs[decision_tf]),
                 "best_epoch": train_result["best_epoch"],
-                "best_val_f1": train_result["best_val_f1"],
+                "best_val_f05": train_result["best_val_f05"],
                 "ml_metrics": {
                     k: v for k, v in eval_result.items()
                     if k not in ("confusion_matrix", "classification_report",
@@ -128,7 +128,7 @@ class WalkForwardValidator:
             print()
 
         aggregated = self._aggregate(fold_results)
-        best_fold = max(fold_results, key=lambda f: f["ml_metrics"].get("f1", 0))["fold"]
+        best_fold = max(fold_results, key=lambda f: f["ml_metrics"].get("f05", f["ml_metrics"].get("f1", 0)))["fold"]
 
         output = {
             "config": {

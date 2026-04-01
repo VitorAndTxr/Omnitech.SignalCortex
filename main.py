@@ -120,7 +120,7 @@ def cmd_train(args):
                          start_epoch=start_epoch)
 
     print(f"\nTraining complete.")
-    print(f"Best epoch: {result['best_epoch']}, Best val F1: {result['best_val_f1']:.4f}")
+    print(f"Best epoch: {result['best_epoch']}, Best val F0.5: {result['best_val_f05']:.4f}")
     print(f"Checkpoint saved: {result['checkpoint_path']}")
 
     # Save per-timeframe normalizers alongside checkpoint

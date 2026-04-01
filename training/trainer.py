@@ -6,7 +6,7 @@ from typing import Dict, Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, fbeta_score
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR, ReduceLROnPlateau, StepLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -72,7 +72,8 @@ class Trainer:
         log_dir = os.path.join(config.export.output_dir, "runs", name)
         self.writer = SummaryWriter(log_dir=log_dir)
 
-        self._best_val_f1 = -1.0
+        self._best_val_fbeta = -1.0
+        self._classification_threshold = 0.7
         self._best_checkpoint_path: Optional[str] = None
 
     def train_epoch(self, train_loader: DataLoader) -> Dict[str, float]:
@@ -96,14 +97,16 @@ class Trainer:
                 self.scheduler.step()
 
             total_loss += loss.item() * len(y)
-            preds = logits.argmax(dim=1).cpu().numpy()
+            probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+            preds = (probs >= self._classification_threshold).astype(int)
             all_preds.extend(preds)
             all_labels.extend(y.cpu().numpy())
 
         avg_loss = total_loss / len(train_loader.dataset)
         accuracy = np.mean(np.array(all_preds) == np.array(all_labels))
         f1 = f1_score(all_labels, all_preds, average="binary", zero_division=0)
-        return {"loss": avg_loss, "accuracy": float(accuracy), "f1": float(f1)}
+        f05 = fbeta_score(all_labels, all_preds, beta=0.5, zero_division=0)
+        return {"loss": avg_loss, "accuracy": float(accuracy), "f1": float(f1), "f05": float(f05)}
 
     def validate(self, val_loader: DataLoader) -> Dict[str, float]:
         from sklearn.metrics import precision_score, recall_score
@@ -120,7 +123,8 @@ class Trainer:
                 logits = self.model(x_5m, x_15m, x_1h)
                 loss = self.criterion(logits, y)
                 total_loss += loss.item() * len(y)
-                preds = logits.argmax(dim=1).cpu().numpy()
+                probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+                preds = (probs >= self._classification_threshold).astype(int)
                 all_preds.extend(preds)
                 all_labels.extend(y.cpu().numpy())
 
@@ -131,8 +135,9 @@ class Trainer:
         precision = float(precision_score(all_labels, all_preds, zero_division=0))
         recall = float(recall_score(all_labels, all_preds, zero_division=0))
         f1 = float(f1_score(all_labels, all_preds, average="binary", zero_division=0))
+        f05 = float(fbeta_score(all_labels, all_preds, beta=0.5, zero_division=0))
         return {"loss": avg_loss, "accuracy": accuracy, "precision": precision,
-                "recall": recall, "f1": f1}
+                "recall": recall, "f1": f1, "f05": f05}
 
     def fit(
         self,
@@ -171,6 +176,8 @@ class Trainer:
                                              "val": val_metrics["loss"]}, epoch)
             self.writer.add_scalars("f1", {"train": train_metrics["f1"],
                                            "val": val_metrics["f1"]}, epoch)
+            self.writer.add_scalars("f05", {"train": train_metrics["f05"],
+                                            "val": val_metrics["f05"]}, epoch)
             self.writer.add_scalar("val/precision", val_metrics["precision"], epoch)
             self.writer.add_scalar("val/recall", val_metrics["recall"], epoch)
 
@@ -184,8 +191,8 @@ class Trainer:
                 else:
                     self.scheduler.step()
 
-            if val_metrics["f1"] > self._best_val_f1:
-                self._best_val_f1 = val_metrics["f1"]
+            if val_metrics["f05"] > self._best_val_fbeta:
+                self._best_val_fbeta = val_metrics["f05"]
                 self._best_checkpoint_path = f"{checkpoint_prefix}.pt"
                 # Unwrap DataParallel for portable checkpoints
                 model_to_save = self.model.module if isinstance(self.model, nn.DataParallel) else self.model
@@ -193,20 +200,21 @@ class Trainer:
                     "epoch": epoch,
                     "model_state_dict": model_to_save.state_dict(),
                     "optimizer_state_dict": self.optimizer.state_dict(),
+                    "val_f05": val_metrics["f05"],
                     "val_f1": val_metrics["f1"],
                     "config": self.config,
                 }, self._best_checkpoint_path)
 
             history.append({"epoch": epoch, "train": train_metrics, "val": val_metrics})
-            best_marker = " *" if val_metrics["f1"] >= self._best_val_f1 else ""
-            print(f"\nEpoch {epoch}/{epochs} | LR: {current_lr:.6f}"
-                  f" | Train loss: {train_metrics['loss']:.4f}, F1: {train_metrics['f1']:.4f}"
+            best_marker = " *" if val_metrics["f05"] >= self._best_val_fbeta else ""
+            print(f"\nEpoch {epoch}/{epochs} | LR: {current_lr:.6f} | Thresh: {self._classification_threshold}"
+                  f" | Train loss: {train_metrics['loss']:.4f}, F0.5: {train_metrics['f05']:.4f}"
                   f" | Val loss: {val_metrics['loss']:.4f}, P: {val_metrics['precision']:.4f},"
-                  f" R: {val_metrics['recall']:.4f}, F1: {val_metrics['f1']:.4f}{best_marker}")
+                  f" R: {val_metrics['recall']:.4f}, F0.5: {val_metrics['f05']:.4f}{best_marker}")
             pbar.set_postfix({
                 "train_loss": f"{train_metrics['loss']:.4f}",
                 "val_loss": f"{val_metrics['loss']:.4f}",
-                "val_f1": f"{val_metrics['f1']:.4f}",
+                "val_f05": f"{val_metrics['f05']:.4f}",
             })
 
             if self.early_stopping.step(val_metrics["loss"]):
@@ -215,8 +223,8 @@ class Trainer:
 
         self.writer.close()
         return {
-            "best_epoch": max(history, key=lambda h: h["val"]["f1"])["epoch"],
-            "best_val_f1": self._best_val_f1,
+            "best_epoch": max(history, key=lambda h: h["val"]["f05"])["epoch"],
+            "best_val_f05": self._best_val_fbeta,
             "checkpoint_path": self._best_checkpoint_path,
             "history": history,
         }
@@ -228,9 +236,9 @@ class Trainer:
         target.load_state_dict(checkpoint["model_state_dict"])
         self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         epoch = checkpoint.get("epoch", 0)
-        self._best_val_f1 = checkpoint.get("val_f1", -1.0)
+        self._best_val_fbeta = checkpoint.get("val_f05", checkpoint.get("val_f1", -1.0))
         self._best_checkpoint_path = checkpoint_path
-        print(f"Resumed from checkpoint: epoch {epoch}, val_f1={self._best_val_f1:.4f}")
+        print(f"Resumed from checkpoint: epoch {epoch}, val_f05={self._best_val_fbeta:.4f}")
         return epoch
 
     def _build_scheduler(self, config: Config):

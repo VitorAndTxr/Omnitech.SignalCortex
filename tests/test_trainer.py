@@ -140,7 +140,7 @@ class TestTrainer:
                              checkpoint_prefix=str(tmp_path / "best"))
         assert "history" in result
         assert len(result["history"]) == 2
-        assert "best_val_f1" in result
+        assert "best_val_f05" in result
 
     def test_early_stopping_halts_training(self, tmp_path):
         cfg = _make_config(epochs=50, patience=1)

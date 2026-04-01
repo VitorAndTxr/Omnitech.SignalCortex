@@ -12,6 +12,7 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
     classification_report,
     confusion_matrix,
+    fbeta_score,
     roc_auc_score,
     roc_curve,
 )
@@ -124,7 +125,7 @@ class Evaluator:
                 x_1h = x_1h.to(self.device)
                 logits = self.model(x_5m, x_15m, x_1h)
                 probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
-                preds = logits.argmax(dim=1).cpu().numpy()
+                preds = (probs >= 0.7).astype(int)
                 all_preds.extend(preds)
                 all_labels.extend(y.numpy())
                 all_probs.extend(probs)
@@ -143,6 +144,7 @@ class Evaluator:
             "precision": float(report.get("BUY", {}).get("precision", 0)),
             "recall": float(report.get("BUY", {}).get("recall", 0)),
             "f1": float(report.get("BUY", {}).get("f1-score", 0)),
+            "f05": float(fbeta_score(all_labels, all_preds, beta=0.5, zero_division=0)),
             "roc_auc": roc_auc,
             "confusion_matrix": cm.tolist(),
             "classification_report": report,
