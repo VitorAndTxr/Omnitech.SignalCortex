@@ -1,0 +1,33 @@
+# Experiment: Fast iteration — small model (~120k params), split pairs for cross-pair validation
+# Purpose: quickly test labeling, pos_weight, and threshold hypotheses
+
+data:
+  pair_names:
+    - BTCUSDT
+    - BNBUSDT
+    - XRPUSDT
+    - ADAUSDT
+    - SOLUSDT
+  val_pair_names:
+    - ETHUSDT
+    - DOTUSDT
+    - AVAXUSDT
+    - LINKUSDT
+
+model:
+  branch_hidden_sizes: [64, 32, 32]
+  branch_window_sizes: [120, 60, 168]
+  num_layers: 2
+
+training:
+  learning_rate: 0.0006
+  batch_size: 2048
+  scheduler: one_cycle
+  warmup_epochs: 0
+  auto_class_weights: false
+  pos_weight: 7.0
+  epochs: 50
+  early_stopping_patience: 10
+
+export:
+  output_dir: outputs/fast_iteration/

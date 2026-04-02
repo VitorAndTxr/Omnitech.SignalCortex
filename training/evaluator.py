@@ -125,7 +125,7 @@ class Evaluator:
                 x_1h = x_1h.to(self.device)
                 logits = self.model(x_5m, x_15m, x_1h)
                 probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
-                preds = (probs >= 0.7).astype(int)
+                preds = logits.argmax(dim=1).cpu().numpy()
                 all_preds.extend(preds)
                 all_labels.extend(y.numpy())
                 all_probs.extend(probs)

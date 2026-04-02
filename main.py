@@ -38,14 +38,21 @@ def cmd_train(args):
     print(f"Device: {device}")
 
     pair_names = config.data.get_pair_names()
-    print(f"Fetching multi-scale data for {pair_names} "
+    val_pair_names = config.data.val_pair_names
+    use_separate_val_pairs = len(val_pair_names) > 0
+
+    all_fetch_pairs = list(set(pair_names + val_pair_names))
+    print(f"Fetching multi-scale data for {all_fetch_pairs} "
           f"(decision: {config.data.decision_timeframe}, timeframes: {config.data.timeframes})...")
+    if use_separate_val_pairs:
+        print(f"  Train pairs: {pair_names}")
+        print(f"  Val pairs:   {val_pair_names}")
 
     from data.splits import apply_date_split
 
     all_pair_dfs = {}
     with _get_data_source(args, config) as db:
-        for pair in pair_names:
+        for pair in all_fetch_pairs:
             print(f"  Fetching {pair}...")
             all_pair_dfs[pair] = db.fetch_multiscale_features(
                 pair_name=pair,
@@ -55,36 +62,70 @@ def cmd_train(args):
                 label_column=config.data.label_column,
             )
 
-    # Merge all pairs: concatenate each timeframe and sort by time
     import pandas as pd
     dt = config.data.decision_timeframe
-    dfs = {}
-    for tf in config.data.timeframes:
-        frames = [all_pair_dfs[p][tf] for p in pair_names if not all_pair_dfs[p][tf].empty]
-        merged = pd.concat(frames, ignore_index=True).sort_values("candle_open_time").reset_index(drop=True)
-        dfs[tf] = merged
 
-    df_decision = dfs[dt]
-    if df_decision.empty:
-        print("ERROR: No data returned. Check database connection and pair/timeframe settings.")
-        sys.exit(1)
+    if use_separate_val_pairs:
+        # Separate pair pools with calibration mix:
+        # - Train: 85% of train pairs (temporally)
+        # - Val: 100% of val pairs first half + 10% tail of train pairs (calibration anchor)
+        # - Test: 100% of val pairs second half
+        train_dfs = {}
+        val_dfs = {}
+        test_dfs = {}
+        for tf in config.data.timeframes:
+            train_frames = [all_pair_dfs[p][tf] for p in pair_names if not all_pair_dfs[p][tf].empty]
+            val_frames = [all_pair_dfs[p][tf] for p in val_pair_names if not all_pair_dfs[p][tf].empty]
+            train_merged = pd.concat(train_frames, ignore_index=True).sort_values("candle_open_time").reset_index(drop=True)
+            val_merged = pd.concat(val_frames, ignore_index=True).sort_values("candle_open_time").reset_index(drop=True)
 
-    print(f"Decision timeframe rows: {len(df_decision)} ({len(pair_names)} pairs)")
+            # Split train pairs: 85% train, 5% val-calibration, 10% unused gap
+            train_only, train_cal, _ = simple_split(train_merged, train_ratio=0.85, val_ratio=0.05)
 
-    train_decision, val_decision, test_decision = simple_split(df_decision)
-    train_start = train_decision["candle_open_time"].min()
-    train_end = train_decision["candle_open_time"].max()
-    val_start = val_decision["candle_open_time"].min()
-    val_end = val_decision["candle_open_time"].max()
-    test_start = test_decision["candle_open_time"].min()
-    test_end = test_decision["candle_open_time"].max()
+            # Split val pairs: 50% val, 50% test
+            _, val_only, test_only = simple_split(val_merged, train_ratio=0.0, val_ratio=0.50)
 
-    train_dfs, val_dfs, test_dfs = apply_date_split(
-        dfs, train_start, train_end, val_start, val_end, test_start, test_end
-    )
-    train_dfs[dt] = train_decision.reset_index(drop=True)
-    val_dfs[dt] = val_decision.reset_index(drop=True)
-    test_dfs[dt] = test_decision.reset_index(drop=True)
+            # Mix calibration data into validation
+            val_mixed = pd.concat([val_only, train_cal], ignore_index=True).sort_values("candle_open_time").reset_index(drop=True)
+
+            train_dfs[tf] = train_only.reset_index(drop=True)
+            val_dfs[tf] = val_mixed.reset_index(drop=True)
+            test_dfs[tf] = test_only.reset_index(drop=True)
+
+        train_cal_rows = len(train_cal)
+        val_cross_rows = len(val_only)
+        print(f"Train rows: {len(train_dfs[dt])} ({len(pair_names)} pairs)")
+        print(f"Val rows:   {len(val_dfs[dt])} ({len(val_pair_names)} val pairs + ~{train_cal_rows} calibration from train pairs)")
+        print(f"Test rows:  {len(test_dfs[dt])} ({len(val_pair_names)} pairs)")
+    else:
+        # Original behavior: all pairs merged, temporal split
+        dfs = {}
+        for tf in config.data.timeframes:
+            frames = [all_pair_dfs[p][tf] for p in pair_names if not all_pair_dfs[p][tf].empty]
+            merged = pd.concat(frames, ignore_index=True).sort_values("candle_open_time").reset_index(drop=True)
+            dfs[tf] = merged
+
+        df_decision = dfs[dt]
+        if df_decision.empty:
+            print("ERROR: No data returned. Check database connection and pair/timeframe settings.")
+            sys.exit(1)
+
+        print(f"Decision timeframe rows: {len(df_decision)} ({len(pair_names)} pairs)")
+
+        train_decision, val_decision, test_decision = simple_split(df_decision)
+        train_start = train_decision["candle_open_time"].min()
+        train_end = train_decision["candle_open_time"].max()
+        val_start = val_decision["candle_open_time"].min()
+        val_end = val_decision["candle_open_time"].max()
+        test_start = test_decision["candle_open_time"].min()
+        test_end = test_decision["candle_open_time"].max()
+
+        train_dfs, val_dfs, test_dfs = apply_date_split(
+            dfs, train_start, train_end, val_start, val_end, test_start, test_end
+        )
+        train_dfs[dt] = train_decision.reset_index(drop=True)
+        val_dfs[dt] = val_decision.reset_index(drop=True)
+        test_dfs[dt] = test_decision.reset_index(drop=True)
 
     train_loader, val_loader, test_loader, class_weights, normalizers = \
         create_multiscale_dataloaders(config, train_dfs, val_dfs, test_dfs)
@@ -92,6 +133,11 @@ def cmd_train(args):
     # CLI --pw overrides config pos_weight
     if hasattr(args, "pw") and args.pw is not None:
         config.training.pos_weight = args.pw
+
+    # Env var TRAIN_LR_OVERRIDE for batch sweep
+    lr_override = os.environ.get("TRAIN_LR_OVERRIDE")
+    if lr_override:
+        config.training.learning_rate = float(lr_override)
 
     # Override class weights with pos_weight if configured
     if config.training.pos_weight > 0:
@@ -109,7 +155,13 @@ def cmd_train(args):
         print(f"Scheduler: {config.training.scheduler} (warmup: {config.training.warmup_epochs} epochs)")
 
     os.makedirs(config.export.output_dir, exist_ok=True)
-    checkpoint_prefix = os.path.join(config.export.output_dir, "best_model")
+    pw = config.training.pos_weight
+    lr = config.training.learning_rate
+    sched = config.training.scheduler
+    hidden = "x".join(str(h) for h in config.model.branch_hidden_sizes)
+    tag = f"_{args.tag}" if hasattr(args, "tag") and args.tag else ""
+    model_name = f"best_pw{pw}_lr{lr}_{sched}_h{hidden}{tag}"
+    checkpoint_prefix = os.path.join(config.export.output_dir, model_name)
     trainer = Trainer(model, config, class_weights, device)
 
     start_epoch = 0
@@ -126,7 +178,7 @@ def cmd_train(args):
     # Save per-timeframe normalizers alongside checkpoint
     import pickle
     for tf, norm in normalizers.items():
-        norm_path = os.path.join(config.export.output_dir, f"best_model_normalizer_{tf}.pkl")
+        norm_path = os.path.join(config.export.output_dir, f"{model_name}_normalizer_{tf}.pkl")
         norm.save(norm_path)
     print(f"Normalizers saved to {config.export.output_dir}")
 
@@ -192,7 +244,7 @@ def cmd_evaluate(args):
 
     num_features = len(config.data.feature_columns)
     model = build_model(num_features, config.model)
-    checkpoint = torch.load(args.checkpoint, map_location=device)
+    checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     evaluator = Evaluator(model, device=device, timeframe=config.data.decision_timeframe)
@@ -235,55 +287,15 @@ def cmd_backtest(args):
     from data.splits import simple_split, apply_date_split
     from models import build_model
     from torch.utils.data import DataLoader
-    from training.backtester import BacktestConfig, run_backtest, print_backtest_results
+    from training.backtester import BacktestConfig, run_backtest, print_backtest_results, export_backtest_excel, export_backtest_summary
 
     config = load_config(args.config)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    pair = args.pair
     dt = config.data.decision_timeframe
+    thresholds = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
 
-    # Use ATR-based labeling thresholds for the pair when CLI defaults are used
-    threshold = config.labeling.get_threshold(pair, dt)
-    tp = threshold.target_percent if args.tp == 1.6 else args.tp
-    sl = threshold.stop_percent if args.sl == 0.4 else args.sl
-
-    print(f"Loading data for {pair}...")
-
-    with _get_data_source(args, config) as db:
-        dfs = db.fetch_multiscale_features(
-            pair_name=pair,
-            timeframes=config.data.timeframes,
-            decision_timeframe=config.data.decision_timeframe,
-            feature_columns=config.data.feature_columns,
-            label_column=config.data.label_column,
-        )
-
-    df_decision = dfs[dt]
-    train_decision, val_decision, test_decision = simple_split(df_decision)
-
-    train_dfs, val_dfs, test_dfs = apply_date_split(
-        dfs,
-        train_decision["candle_open_time"].min(), train_decision["candle_open_time"].max(),
-        val_decision["candle_open_time"].min(), val_decision["candle_open_time"].max(),
-        test_decision["candle_open_time"].min(), test_decision["candle_open_time"].max(),
-    )
-    train_dfs[dt] = train_decision.reset_index(drop=True)
-    val_dfs[dt] = val_decision.reset_index(drop=True)
-    test_dfs[dt] = test_decision.reset_index(drop=True)
-
-    _, _, test_loader, _, normalizers = create_multiscale_dataloaders(config, train_dfs, val_dfs, test_dfs)
-
-    # For backtest, use all data (full dataset as a single eval set)
-    from data.dataset import _build_multiscale_dataset
-    w5, w15, w1h = config.model.branch_window_sizes
-    eval_ds = _build_multiscale_dataset(
-        dfs, dt, config.data.feature_columns, config.data.label_column,
-        normalizers, w5, w15, w1h,
-    )
-    eval_loader = DataLoader(eval_ds, batch_size=config.training.batch_size, shuffle=False)
-
-    # Load model
+    # Load model once
     num_features = len(config.data.feature_columns)
     model = build_model(num_features, config.model)
     checkpoint = torch.load(args.checkpoint, map_location=device, weights_only=False)
@@ -291,47 +303,105 @@ def cmd_backtest(args):
     model.to(device)
     model.eval()
 
-    print(f"Model loaded from {args.checkpoint} (epoch {checkpoint.get('epoch', '?')})")
-    print(f"Running inference on {pair}...")
+    # Resolve pair list
+    if args.pair.lower() == "all":
+        pairs = config.data.get_pair_names() + config.data.val_pair_names
+        pairs = list(dict.fromkeys(pairs))  # deduplicate preserving order
+    else:
+        pairs = [p.strip() for p in args.pair.split(",")]
 
-    # Collect probabilities
-    all_probs = []
-    with torch.no_grad():
-        for x_5m, x_15m, x_1h, y in eval_loader:
-            logits = model(x_5m.to(device), x_15m.to(device), x_1h.to(device))
-            probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
-            all_probs.extend(probs)
+    # Backtest output dir: base_output/backtest_<model_name>/
+    checkpoint_stem = os.path.splitext(os.path.basename(args.checkpoint))[0]
+    output_dir = os.path.join(config.export.output_dir, f"backtest_{checkpoint_stem}")
+    all_pair_results = {}
 
-    all_probs = np.array(all_probs)
+    for pair in pairs:
+        print(f"\n{'='*60}")
+        print(f"Backtesting {pair}")
+        print(f"{'='*60}")
 
-    # Get prices aligned with dataset output (after window trimming)
-    price_cols = ["close_price", "high_price", "low_price"]
-    w_max = max(config.model.branch_window_sizes)
-    prices = dfs[dt][price_cols].iloc[w_max - 1:].reset_index(drop=True)
-    prices = prices.iloc[:len(all_probs)].reset_index(drop=True)
+        threshold_cfg = config.labeling.get_threshold(pair, dt)
+        tp = threshold_cfg.target_percent if args.tp == 1.6 else args.tp
+        sl = threshold_cfg.stop_percent if args.sl == 0.4 else args.sl
 
-    # Thresholds to test
-    thresholds = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
+        print(f"Loading data for {pair}...")
 
-    is_btc_pair = pair.upper().endswith("BTC")
-    initial_capital = 0.015 if is_btc_pair else 1000.0
-    currency = "BTC" if is_btc_pair else "USD"
+        with _get_data_source(args, config) as db:
+            dfs = db.fetch_multiscale_features(
+                pair_name=pair,
+                timeframes=config.data.timeframes,
+                decision_timeframe=config.data.decision_timeframe,
+                feature_columns=config.data.feature_columns,
+                label_column=config.data.label_column,
+            )
 
-    bt_config = BacktestConfig(
-        tp_pct=tp,
-        sl_pct=sl,
-        trailing_pct=args.trailing,
-        fee_pct=args.fee,
-        initial_capital=initial_capital,
-    )
+        df_decision = dfs[dt]
+        train_decision, val_decision, test_decision = simple_split(df_decision)
 
-    print(f"\nBacktest config: TP={bt_config.tp_pct}%, SL={bt_config.sl_pct}%, "
-          f"Trailing={bt_config.trailing_pct}%, Fee={bt_config.fee_pct}%")
-    print(f"Capital: {initial_capital} {currency} | Max drawdown limit: {bt_config.max_drawdown_pct}%")
-    print(f"Candles: {len(all_probs)}, BUY prob range: [{all_probs.min():.4f}, {all_probs.max():.4f}]")
+        train_dfs, val_dfs, test_dfs = apply_date_split(
+            dfs,
+            train_decision["candle_open_time"].min(), train_decision["candle_open_time"].max(),
+            val_decision["candle_open_time"].min(), val_decision["candle_open_time"].max(),
+            test_decision["candle_open_time"].min(), test_decision["candle_open_time"].max(),
+        )
+        train_dfs[dt] = train_decision.reset_index(drop=True)
+        val_dfs[dt] = val_decision.reset_index(drop=True)
+        test_dfs[dt] = test_decision.reset_index(drop=True)
 
-    results = run_backtest(all_probs, prices, thresholds, bt_config, config.data.decision_timeframe)
-    print_backtest_results(results)
+        _, _, test_loader, _, normalizers = create_multiscale_dataloaders(config, train_dfs, val_dfs, test_dfs)
+
+        from data.dataset import _build_multiscale_dataset
+        w5, w15, w1h = config.model.branch_window_sizes
+        eval_ds = _build_multiscale_dataset(
+            dfs, dt, config.data.feature_columns, config.data.label_column,
+            normalizers, w5, w15, w1h,
+        )
+        eval_loader = DataLoader(eval_ds, batch_size=config.training.batch_size, shuffle=False)
+
+        print(f"Model loaded from {args.checkpoint} (epoch {checkpoint.get('epoch', '?')})")
+        print(f"Running inference on {pair}...")
+
+        all_probs = []
+        with torch.no_grad():
+            for x_5m, x_15m, x_1h, y in eval_loader:
+                logits = model(x_5m.to(device), x_15m.to(device), x_1h.to(device))
+                probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+                all_probs.extend(probs)
+
+        all_probs = np.array(all_probs)
+
+        price_cols = ["close_price", "high_price", "low_price"]
+        w_max = max(config.model.branch_window_sizes)
+        prices = dfs[dt][price_cols].iloc[w_max - 1:].reset_index(drop=True)
+        prices = prices.iloc[:len(all_probs)].reset_index(drop=True)
+
+        is_btc_pair = pair.upper().endswith("BTC")
+        initial_capital = 0.015 if is_btc_pair else 1000.0
+        currency = "BTC" if is_btc_pair else "USD"
+
+        bt_config = BacktestConfig(
+            tp_pct=tp, sl_pct=sl,
+            trailing_pct=args.trailing, fee_pct=args.fee,
+            initial_capital=initial_capital,
+        )
+
+        print(f"\nBacktest config: TP={bt_config.tp_pct}%, SL={bt_config.sl_pct}%, "
+              f"Trailing={bt_config.trailing_pct}%, Fee={bt_config.fee_pct}%")
+        print(f"Capital: {initial_capital} {currency} | Max drawdown limit: {bt_config.max_drawdown_pct}%")
+        print(f"Candles: {len(all_probs)}, BUY prob range: [{all_probs.min():.4f}, {all_probs.max():.4f}]")
+
+        results = run_backtest(all_probs, prices, thresholds, bt_config, config.data.decision_timeframe)
+        print_backtest_results(results)
+
+        # Export per-pair Excel
+        xlsx_path = export_backtest_excel(pair, results, bt_config, output_dir)
+        print(f"\nExcel saved: {xlsx_path}")
+        all_pair_results[pair] = results
+
+    # Export summary if multiple pairs
+    if len(all_pair_results) > 1:
+        summary_path = export_backtest_summary(all_pair_results, output_dir)
+        print(f"\nSummary Excel saved: {summary_path}")
 
 
 def cmd_export(args):
@@ -374,6 +444,7 @@ def main():
     p_train.add_argument("--resume", default=None, help="Path to .pt checkpoint to resume training from")
     p_train.add_argument("--parquet", default=None, help="Path to parquet directory (instead of DB)")
     p_train.add_argument("--pw", type=float, default=None, help="Override pos_weight (e.g. --pw 5.0)")
+    p_train.add_argument("--tag", default=None, help="Label tag for checkpoint name (e.g. raw, timeout72)")
 
     # evaluate
     p_eval = subparsers.add_parser("evaluate", help="Evaluate a trained checkpoint on test set")

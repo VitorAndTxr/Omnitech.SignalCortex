@@ -9,6 +9,8 @@ Strategies:
 All strategies are long-only and allow a single position at a time.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
@@ -313,3 +315,78 @@ def print_backtest_results(results: Dict[str, pd.DataFrame]) -> None:
                   f"{row['max_drawdown_pct']:>7.2f} | {row['sharpe']:>7.3f} | "
                   f"{row['avg_duration']:>7.1f} | {row['exposure_pct']:>5.1f}% | "
                   f"{row['final_equity']:>10.2f} | {status:>7}")
+
+
+def export_backtest_excel(
+    pair: str,
+    results: Dict[str, pd.DataFrame],
+    bt_config: BacktestConfig,
+    output_dir: str,
+) -> str:
+    """Export backtest results for a single pair to an Excel file with one sheet per strategy."""
+    os.makedirs(output_dir, exist_ok=True)
+    filepath = os.path.join(output_dir, f"backtest_{pair}.xlsx")
+
+    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+        # Config sheet
+        config_df = pd.DataFrame([{
+            "pair": pair,
+            "tp_pct": bt_config.tp_pct,
+            "sl_pct": bt_config.sl_pct,
+            "trailing_pct": bt_config.trailing_pct,
+            "fee_pct": bt_config.fee_pct,
+            "initial_capital": bt_config.initial_capital,
+            "max_drawdown_pct": bt_config.max_drawdown_pct,
+        }])
+        config_df.to_excel(writer, sheet_name="Config", index=False)
+
+        strategy_names = {"tp_sl": "TP_SL", "signal": "Signal_Exit", "trailing": "Trailing_Stop"}
+        for key, sheet_name in strategy_names.items():
+            results[key].to_excel(writer, sheet_name=sheet_name, index=False)
+
+    return filepath
+
+
+def export_backtest_summary(
+    all_pair_results: Dict[str, Dict[str, pd.DataFrame]],
+    output_dir: str,
+) -> str:
+    """Export a summary Excel with the best threshold row per pair/strategy."""
+    os.makedirs(output_dir, exist_ok=True)
+    filepath = os.path.join(output_dir, "backtest_summary.xlsx")
+
+    strategy_names = {"tp_sl": "TP_SL", "signal": "Signal_Exit", "trailing": "Trailing_Stop"}
+
+    with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
+        for strat_key, sheet_name in strategy_names.items():
+            rows = []
+            for pair, results in all_pair_results.items():
+                df = results[strat_key]
+                if df.empty:
+                    continue
+                # Best row: highest profit factor among rows with trades > 0
+                viable = df[df["total_trades"] > 0]
+                if viable.empty:
+                    best = df.iloc[0].to_dict()
+                else:
+                    best = viable.loc[viable["profit_factor"].idxmax()].to_dict()
+                best["pair"] = pair
+                rows.append(best)
+
+            if rows:
+                summary_df = pd.DataFrame(rows)
+                cols = ["pair"] + [c for c in summary_df.columns if c != "pair"]
+                summary_df[cols].to_excel(writer, sheet_name=sheet_name, index=False)
+
+        # All data sheet: every pair × strategy × threshold
+        all_rows = []
+        for pair, results in all_pair_results.items():
+            for strat_key, strat_name in strategy_names.items():
+                df = results[strat_key].copy()
+                df.insert(0, "pair", pair)
+                df.insert(1, "strategy", strat_name)
+                all_rows.append(df)
+        if all_rows:
+            pd.concat(all_rows, ignore_index=True).to_excel(writer, sheet_name="All_Data", index=False)
+
+    return filepath

@@ -21,6 +21,7 @@ class DatabaseConfig:
 class DataConfig:
     pair_name: str = "BTCUSDT"
     pair_names: List[str] = field(default_factory=list)  # multi-pair; if empty, uses pair_name
+    val_pair_names: List[str] = field(default_factory=list)  # separate pairs for validation; if empty, uses same as train
     decision_timeframe: str = "5m"
     timeframes: List[str] = field(default_factory=lambda: ["5m", "15m", "1h"])
     feature_columns: List[str] = field(default_factory=list)
@@ -137,6 +138,7 @@ def _dict_to_config(raw: dict) -> Config:
     data = DataConfig(
         pair_name=data_raw.get("pair_name", "BTCUSDT"),
         pair_names=data_raw.get("pair_names", []),
+        val_pair_names=data_raw.get("val_pair_names", []),
         decision_timeframe=data_raw.get("decision_timeframe", "5m"),
         timeframes=data_raw.get("timeframes", ["5m", "15m", "1h"]),
         feature_columns=data_raw.get("feature_columns", []),

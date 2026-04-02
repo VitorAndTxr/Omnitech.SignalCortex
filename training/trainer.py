@@ -17,16 +17,22 @@ from models import BaseModel
 
 
 class EarlyStopping:
-    def __init__(self, patience: int, min_delta: float = 0.0):
+    def __init__(self, patience: int, min_delta: float = 0.0, mode: str = "min"):
         self.patience = patience
         self.min_delta = min_delta
+        self.mode = mode
         self.counter = 0
-        self.best_loss = float("inf")
+        self.best_value = float("inf") if mode == "min" else float("-inf")
 
-    def step(self, val_loss: float) -> bool:
+    def step(self, value: float) -> bool:
         """Returns True if training should stop."""
-        if val_loss < self.best_loss - self.min_delta:
-            self.best_loss = val_loss
+        if self.mode == "min":
+            improved = value < self.best_value - self.min_delta
+        else:
+            improved = value > self.best_value + self.min_delta
+
+        if improved:
+            self.best_value = value
             self.counter = 0
             return False
         self.counter += 1
@@ -66,7 +72,7 @@ class Trainer:
         self.base_lr = config.training.learning_rate
         self._scheduler_deferred = config.training.scheduler == "one_cycle"
         self.scheduler = None if self._scheduler_deferred else self._build_scheduler(config)
-        self.early_stopping = EarlyStopping(config.training.early_stopping_patience)
+        self.early_stopping = EarlyStopping(config.training.early_stopping_patience, mode="max")
 
         name = run_name or f"multiscale_{config.data.decision_timeframe}"
         log_dir = os.path.join(config.export.output_dir, "runs", name)
@@ -97,8 +103,7 @@ class Trainer:
                 self.scheduler.step()
 
             total_loss += loss.item() * len(y)
-            probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
-            preds = (probs >= self._classification_threshold).astype(int)
+            preds = logits.argmax(dim=1).cpu().numpy()
             all_preds.extend(preds)
             all_labels.extend(y.cpu().numpy())
 
@@ -217,7 +222,7 @@ class Trainer:
                 "val_f05": f"{val_metrics['f05']:.4f}",
             })
 
-            if self.early_stopping.step(val_metrics["loss"]):
+            if self.early_stopping.step(val_metrics["f05"]):
                 print(f"\nEarly stopping at epoch {epoch}")
                 break
 
